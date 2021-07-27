@@ -1,0 +1,1675 @@
+#Requires -RunAsAdministrator
+param ([switch]$UserAudit = $false, [switch]$BillingUpdate = $false)
+Set-ExecutionPolicy Unrestricted
+
+#####################################################################
+### Load Variables from external file
+### Make sure you setup your variables in the User Audit - Constants.ps1 file
+. "$PSScriptRoot\User Audit - Constants.ps1"
+#####################################################################
+Write-Host "User audit starting..."
+
+# Ensure they are using the latest TLS version
+$CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
+if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
+	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
+}
+
+Import-module ITGlueAPI
+Add-ITGlueBaseURI -base_uri $APIEndpoint
+Add-ITGlueAPIKey $APIKEy
+
+Write-Host "Successfully imported required modules and configured the ITGlue API."
+
+if ($CheckEmail -and $EmailType -eq "O365" -and $O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
+	# Connect to the mail service (it works better doing this first thing)
+	Import-Module AzureAD
+	Import-Module ExchangeOnlineManagement
+	Connect-AzureAD -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -ApplicationId $O365UnattendedLogin.AppID -TenantId $O365UnattendedLogin.TenantId
+	Connect-ExchangeOnline -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -AppID $O365UnattendedLogin.AppID -Organization $O365UnattendedLogin.Organization -ShowProgress $true -ShowBanner:$false
+	Write-Host "Successfully imported email related modules."
+} elseif ($CheckEmail -and $EmailType -eq "Exchange") {
+	$Credential = Get-StoredCredential -Target 'ExchangeServer'
+	$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServerFQDN/PowerShell/" -Authentication Kerberos -Credential $Credential
+	Import-PSSession $Session -DisableNameChecking
+}
+
+###################################################
+##### Get Data and Start the matching process #####
+###################################################
+
+# Get the contact list from IT Glue
+Write-Host "Querying IT Glue..."
+$FullContactList = Get-ITGlueContacts -page_size 1000 -organization_id $OrgID
+
+if ($FullContactList.Error) {
+	Write-Host "An error occured when trying to use the IT Glue API!" -ForegroundColor Red
+	Write-Host "Error: $($FullContactList.Error)" -ForegroundColor Red
+	Write-Host "Please fix the issue then try again."
+	Read-Host "Press ENTER to close..." 
+	exit
+} else {
+	$FullContactList = $FullContactList.data
+}
+
+$ContactCount = ($FullContactList | Measure-Object).Count
+Write-Host "Got the contact data from IT Glue. $ContactCount contacts were found."
+
+# Get the list of locations for later
+$Locations = (Get-ITGlueLocations -org_id $OrgID).data
+$Locations.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+$Locations | ForEach-Object { $_.attributes.id = $_.id }
+$Locations = $Locations.attributes
+$HasMultipleLocations = $false
+if (($Locations | Measure-Object).Count -gt 1) {
+	$HasMultipleLocations = $true
+}
+
+# Get the organizations name
+$OrganizationInfo = (Get-ITGlueOrganizations -id $OrgID).data
+$OrgFullName = $OrganizationInfo[0].attributes.name
+$OrgShortName = $OrganizationInfo[0].attributes."short-name"
+
+# Get the list of contacts that are considered an employee type
+$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
+$EmployeeContacts = $FullContactList.attributes | Where-Object {$_."contact-type-name" -in $EmployeeContactTypes -or !$_."contact-type-name"}
+
+################
+#### Running a User Audit
+#### This will check for issues and open a ticket to get them fixed
+#### Use parameter -UserAudit $true   (default off)
+################
+if ($UserAudit) {
+
+	# Get the existing matched list from the user audit
+	$auditFilesPath = "C:\billing_audit\contacts.json"
+	if (Test-Path $auditFilesPath) {
+		$MatchedContactList = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+	}
+
+	if ($CheckAD) {
+		# Get all AD users
+		Write-Host "===================================" -ForegroundColor Blue
+		Write-Host "Getting AD users to look for disabled users."
+		$FullADUsers = Get-ADUser -Filter * -Properties * | 
+							Select-Object -Property Name, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
+											Description, LastLogonDate, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
+											@{Name="OUs"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)').Value -replace 'OU='}}, 
+											@{Name="PrimaryCN"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)')[0].Groups[2]}}, 
+											@{Name="CNs"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)').Value -replace 'CN='}}, 
+											City, Department, Division, Title
+		# Get groups
+		$FullADUsers | ForEach-Object {
+			$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
+			$_.Groups = @((Get-ADPrincipalGroupMembership $_.Username | Select-Object Name).Name)
+		}
+
+		if ($ADIncludeSubFolders) {
+			$ADEmployees = @()
+			foreach ($User in $FullADUsers) {
+				$Intersect = $User.OUs | Where-Object {$ADUserFolders -contains $_}
+				if ($Intersect) {
+					$ADEmployees += $User
+				} else {
+					$Intersect = $User.CNs | Where-Object {$ADUserFolders -contains $_}
+					if ($Intersect) {
+						$ADEmployees += $User
+					}
+				}
+			}
+		} else {
+			$ADEmployees = $FullADUsers | Where-Object {$_.PrimaryOU -in $ADUserFolders}
+			if (($ADEmployees | Measure-Object).Count -lt (($EmployeeContacts | Measure-Object).Count / 2)) {
+				$ADEmployees += $FullADUsers | Where-Object {$_.PrimaryCN -in $ADUserFolders}
+			}
+		}
+
+		$ADMatches = New-Object -TypeName "System.Collections.ArrayList"
+		$NoMatch = @()
+		$NoMatchButIgnore = @() # For IT Glue contacts without an AD account
+		foreach ($User in $EmployeeContacts) {
+			$ADMatch = @()
+			$Emails = $User."contact-emails"
+			$PrimaryEmail = ($Emails | Where-Object { $_.primary }).value
+			$FirstName = $User."first-name"
+			$LastName = $User."last-name"
+			$FullName = $User.Name
+			$Type = $User."contact-type-name"
+			$Notes = $User.notes
+
+			# Check notes for "# No AD Account", ignore these accounts
+			if ((!$EmailOnlyHaveAD -and $Type -eq "Employee - Email Only") -or $Notes -like '*# No AD Account*') {
+				$NoMatchButIgnore += $User
+				continue
+			}
+
+			# Check $MatchedContactList (from the user audit script) for the latest match
+			$ExistingMatch = $MatchedContactList | Where-Object { $_.id -eq $User.id }
+			if ($ExistingMatch) {
+				if ($ExistingMatch."AD-Connected?" -eq $false -or !$ExistingMatch."AD-Username") {
+					$NoMatchButIgnore += $User
+					continue
+				} else {
+					$UsernameMatch = $ExistingMatch | Select-Object "AD-Username"
+					$ADMatch += $ADEmployees | Where-Object { $_.Username -like $UsernameMatch }
+				}
+			}
+			
+			# Look for a match if no match already exists (likely a new contact)
+			while (!$ADMatch) {
+				# Check notes for a username
+				$ADMatch += $ADEmployees | Where-Object { $Notes -match ".*(Username: " + $_.Username + "(\s|W|$)).*" }
+				if ($ADMatch) { break; }
+				# Primary email search
+				if ($PrimaryEmail) {
+					$ADMatch += $ADEmployees | Where-Object { $_.EmailAddress -like $PrimaryEmail }
+				}
+				# First and last name
+				$ADMatch += $ADEmployees | Where-Object { $_.GivenName -like $FirstName -and $_.Surname -like $LastName }
+				if ($ADMatch) { break; }
+				# Other emails & first name if more than 1 is found
+				foreach ($Email in $Emails) {
+					if (!$Email) { continue; }
+					if ($Email.primary) { continue; }
+					$ITGlueEmailUses = $EmployeeContacts | Where-Object { $_."contact-emails" -contains $Email.value }
+					$ADEmailUses = $ADEmployees | Where-Object { $_.EmailAddress -like $Email.value }
+					if (($ADEmailUses | Measure-Object).Count -lt 1) { continue; }
+					if (($ITGlueEmailUses | Measure-Object).Count -le 1 -and ($ADEmailUses | Measure-Object).Count -le 1) {
+						# only 1 match
+						$ADMatch = $ADEmployees | Where-Object { $_.EmailAddress -like $Email.value }
+						if ($ADMatch) { break; }
+					} else {
+						# more than 1 match, check first name as well
+						$ADMatch = $ADEmployees | Where-Object { $_.EmailAddress -like $Email.value -and $_.Name -like "*" + $FirstName + "*"}
+						if ($ADMatch) { break; }
+					}
+				}
+				break;
+			}
+
+			# If more than 1 match, narrow down to 1
+			$ADMatch = $ADMatch | Sort-Object Username -Unique
+			if ($ADMatch -and ($ADMatch | Measure-Object).Count -gt 1) {
+				$MostLikelyMatches = $ADMatch | Where-Object { $_.GivenName -like $FirstName -and $_.Surname -like $LastName }
+				if (($MostLikelyMatches | Measure-Object).Count -gt 1) {
+					$ADMatch = $ADMatch | Select-Object -First 1
+				} else {
+					$ADMatch = $MostLikelyMatches
+				} 
+			}
+
+			# Add to the Match or NoMatch array
+			if ($ADMatch) {
+				# Add the AD email first to help with the O365 match later
+				if ($ADMatch.EmailAddress) {
+					$ADEmail = [PSCustomObject]@{
+						primary = $false
+						value = $ADMatch.EmailAddress
+						"label-name" = 'AD Email'
+					}
+					$User."contact-emails" += $ADEmail
+					$EmployeeContacts = $EmployeeContacts | Where-Object { $_.ID -ne $User.ID }
+					$EmployeeContacts += $User
+				}
+
+				$match = [PSCustomObject]@{
+					id = $User.ID
+					name = $FullName
+					type = $Type
+					itglue = $User
+					ad = $ADMatch
+				}
+				$ADMatches.Add($match) | Out-Null
+			} else {
+				if ($Type -ne 'Terminated' -and $Type -ne 'Employee - Email Only' -and $Type -ne 'Employee - On Leave') {
+					$NoMatch += $User
+				}
+			}
+		}
+		$ADMatchCount = ($ADMatches | Measure-Object).Count
+		Write-Host "Finished matching all IT Glue contacts to their AD accounts. $ADMatchCount matches were made."
+	}
+
+	# Get the existing unmatched AD list from the user audit
+	$auditFilesPath = "C:\billing_audit\unmatchedAD.json"
+	$OldUnmatchedADUsernames = @()
+	if (Test-Path $auditFilesPath) {
+		$OldUnmatchedAD = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+		if ($OldUnmatchedAD) {
+			$OldUnmatchedADUsernames = $OldUnmatchedAD.Username
+		}
+	}
+
+	$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" }
+	$UnmatchedAD = $UnmatchedAD | Where-Object { $_.Username -notin $OldUnmatchedADUsernames } # filter out accounts that have already been reviewed
+
+	if ($CheckEmail -and (($EmailType -eq "O365" -and $O365UnattendedLogin -and $O365UnattendedLogin.AppId) -or $EmailType -eq "Exchange")) {
+		Write-Host "Getting $EmailType Mailboxes. This may take a minute..." -ForegroundColor 'black' -BackgroundColor 'red'
+
+		if ($EmailType -eq "O365") {
+			$O365Mailboxes = Get-EXOMailbox -ResultSize unlimited -PropertySets Minimum, AddressList, Delivery, SoftDelete | 
+				Select-Object -Property Name, DisplayName, Alias, PrimarySmtpAddress, EmailAddresses, 
+					RecipientTypeDetails, Guid, UserPrincipalName, 
+					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
+				Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
+			$DisabledAccounts = Get-AzureADUser -Filter "AccountEnabled eq false" | Select-Object -ExpandProperty UserPrincipalName
+			$UnlicensedUsers = Get-AzureADUser | Where-Object {
+				$licensed = $false
+				for ($i = 0; $i -le ($_.AssignedLicenses | Measure-Object).Count ; $i++) { 
+					if ([string]::IsNullOrEmpty($_.AssignedLicenses[$i].SkuId) -ne $true) { 
+						$licensed = $true 
+					} 
+				} 
+				if ($licensed -eq $false) { 
+					return $true
+				} else {
+					return $false
+				}
+			} | Select-Object DisplayName, UserPrincipalName, @{N="FirstName"; E={$_."GivenName"}}, @{N="LastName"; E={$_."Surname"}}, @{N="Title"; E={$_."JobTitle"}}
+			$UnlicensedUsers | Add-Member -MemberType NoteProperty -Name PrimarySmtpAddress -Value 'no license'
+			$UnlicensedUsers | Add-Member -MemberType NoteProperty -Name EmailAddresses -Value @()
+			$UnlicensedUsers | Add-Member -MemberType NoteProperty -Name RecipientTypeDetails -Value "None"
+
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AccountDisabled -Value $false
+			$O365Mailboxes | ForEach-Object { 
+				if ($_.UserPrincipalName -in $DisabledAccounts) {
+					$_.AccountDisabled = $true
+				}
+			}
+
+			$LicensePlanList = Get-AzureADSubscribedSku
+			$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, GivenName, Surname, JobTitle
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AssignedLicenses -Value @()
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name PrimaryLicense -Value $null
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name FirstName -Value $null
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name LastName -Value $null
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name Title -Value $null
+
+			$O365Mailboxes | ForEach-Object { 
+				if ($_.UserPrincipalName -in $AzureUsers.UserPrincipalName) {
+					$Mailbox = $_
+					$LicenseSkus = ($AzureUsers | Where-Object { $_.UserPrincipalName -eq $Mailbox.UserPrincipalName }).AssignedLicenses | Select-Object SkuId
+					$Licenses = @()
+					$LicenseSkus | ForEach-Object {
+						$sku = $_.SkuId
+						foreach ($license in $licensePlanList) {
+							if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
+								$Licenses += $license.SkuPartNumber
+								break
+							}
+						}
+					}
+					$_.AssignedLicenses = $Licenses
+					$_.PrimaryLicense = "None"
+
+					foreach ($LicenseSku in $O365LicenseTypes.Keys) {
+						if ($LicenseSku -in $Licenses) {
+							$_.PrimaryLicense = $O365LicenseTypes[$LicenseSku]
+							break
+						}
+					}
+
+
+
+					$AzureUser = $AzureUsers | Where-Object { $_.UserPrincipalName -eq $Mailbox.UserPrincipalName }
+					$_.FirstName = $AzureUser.GivenName
+					$_.LastName = $AzureUser.Surname
+					$_.Title = $AzureUser.JobTitle
+
+					if ($CheckInactivity) {
+						$O365MailboxStat = $O365MailboxStats | Where-Object { $_.DisplayName -like $Mailbox.DisplayName }
+						$_.LastUserActionTime = $O365MailboxStat.LastUserActionTime
+					}
+				}
+			}
+		} else {
+			$O365Mailboxes = Get-Mailbox -ResultSize unlimited | 
+				Select-Object -Property Name, DisplayName, Alias, PrimarySmtpAddress, EmailAddresses, SamAccountName, 
+					RecipientTypeDetails, AccountDisabled, IsDirSynced, Guid,
+					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
+				Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name FirstName -Value $null
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name LastName -Value $null
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name Title -Value $null
+			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name LastUserActionTime -Value $null
+			$O365MailboxUsers =  Get-User -ResultSize unlimited | Select-Object Name, FirstName, LastName, Title
+
+			for ($i = 0; $i -lt $O365Mailboxes.Count; $i++) {
+				$O365MailboxUser = $O365MailboxUsers | Where-Object { $_.Name -like $O365Mailboxes[$i].Name }
+				$O365Mailboxes[$i].FirstName = $O365MailboxUser.FirstName
+				$O365Mailboxes[$i].LastName = $O365MailboxUser.LastName
+				$O365Mailboxes[$i].Title = $O365MailboxUser.Title
+			}
+		}
+
+		if ($EmailType -eq "O365") {
+			Disconnect-ExchangeOnline -Confirm:$false
+		} elseif ($ExchangeServerFQDN) {
+			Remove-PSSession $Session
+		}
+
+		$MailboxCount = ($O365Mailboxes | Measure-Object).Count
+		Write-Host "Got all $MailboxCount mailboxes. Now comparing them with IT Glue accounts."
+
+		# Cleanup the email list
+		for ($i = 0; $i -lt $O365Mailboxes.Count; $i++) {
+			$EmailAddresses = $O365Mailboxes[$i].EmailAddresses
+			$EmailAddresses = $EmailAddresses | Where-Object { $_ -notmatch '^SPO\:SPO_.+' }
+			$EmailAddresses = $EmailAddresses -replace '^SIP:|SMTP:', ''
+			$O365Mailboxes[$i].EmailAddresses = $EmailAddresses
+		}
+
+		# Make comparisons to IT Glue list
+		$O365Matches = New-Object -TypeName "System.Collections.ArrayList"
+		$NoO365Match = @()
+		$NoO365MatchButIgnore = @() # For IT Glue contacts without an O365 account
+		foreach ($User in ($FullContactList.attributes | Where-Object {$_."contact-type-name" -notlike "Vendor Support"})) {
+			$O365Match = @()
+			$Emails = $User."contact-emails".value
+			$PrimaryEmail = ($User."contact-emails" | Where-Object { $_.primary }).value
+			if (!$PrimaryEmail -and ($Emails | Measure-Object).Count -gt 0) {
+				$PrimaryEmail = $Emails | Select-Object -First 1 
+			}
+			$FirstName = $User."first-name"
+			$LastName = $User."last-name"
+			$FullName = $User.Name
+			$Type = $User."contact-type-name"
+			$Notes = $User.notes
+
+			$HasITGEmails = $false
+			if (($Emails | Measure-Object).Count -gt 0) {
+				$HasITGEmails = $true
+			}
+
+			# Check notes for "# No O365 Account", ignore these accounts
+			if ($Notes -like '*# No O365 Account*') {
+				$NoO365MatchButIgnore += $User
+				continue
+			}
+
+			# Check $MatchedContactList (from the user audit script) for the latest match
+			$ExistingMatch = $MatchedContactList | Where-Object { $_.id -eq $User.id }
+			if ($ExistingMatch) {
+				if ($ExistingMatch."O365-Connected?" -eq $false -or !$ExistingMatch."O365-PrimarySmtp") {
+					$NoMatchButIgnore += $User
+					continue
+				} else {
+					$PrimaryEmail = $ExistingMatch | Select-Object "O365-PrimarySmtp"
+					$O365Match += $O365Mailboxes | Where-Object { $_.PrimarySmtpAddress -like $PrimaryEmail }
+				}
+			}
+
+			# Look for a match
+			while (!$O365Match) {
+				# Check notes for an email
+				$O365Match += $O365Mailboxes | Where-Object { $Notes -like "*O365 Email: " + $_.PrimarySmtpAddress + "*" }
+				if ($O365Match) { break; }
+				# Email search
+				if ($HasITGEmails) {
+					$O365Match += $O365Mailboxes | Where-Object { $_.PrimarySmtpAddress -like $PrimaryEmail }
+					$O365Match += $O365Mailboxes | Where-Object { $Emails -contains $_.PrimarySmtpAddress }
+					$O365Match += $O365Mailboxes | Where-Object { $_.EmailAddresses -contains $PrimaryEmail }
+					foreach ($Mailbox in $O365Mailboxes) {
+						$Intersect = $Mailbox.EmailAddresses | Where-Object { $Emails -contains $_ }
+						if ($Intersect) {
+							$O365Match += $Mailbox
+							break
+						}
+					}
+				}
+				# First and last name
+				$O365Match += $O365Mailboxes | Where-Object { $_.FirstName -like $FirstName -and $_.LastName -like $LastName }
+				if ($O365Match) { break; }
+				$O365Match += $UnlicensedUsers | Where-Object { $_.FirstName -like $FirstName -and $_.LastName -like $LastName }
+				if ($O365Match) { break; }
+				# Check first name / last name against display name
+				$O365Match = $O365Mailboxes | Where-Object { $_.DisplayName -like "*$FirstName*" -and $_.DisplayName -like "*$LastName*" }
+				if ($O365Match) { break; }
+				$O365Match = $UnlicensedUsers | Where-Object { $_.DisplayName -like "*$FirstName*" -and $_.DisplayName -like "*$LastName*" }
+				if ($O365Match) { break; }
+				# Get the root of each email address (before @) for the next checks
+				if ($HasITGEmails) {
+					$PrimaryEmailRoot = $PrimaryEmail.split("@")[0]
+					$EmailsRoot = $Emails | ForEach-Object { $_.split("@")[0] }
+				}
+				$CommonRoots = @($FirstName, $LastName)
+				$CommonRoots += $FirstName + $LastName.Substring(0, 1)
+				$CommonRoots += $LastName + $FirstName.Substring(0, 1)
+				$CommonRoots += $FirstName.Substring(0, 1) + $LastName
+				$CommonRoots += $FirstName + "." + $LastName
+				$CommonRoots += $FirstName + "_" + $LastName
+				$CommonRoots = $CommonRoots -replace '\s', ''
+				[array]::Reverse($CommonRoots) # in order of most useful to least
+				# Check email roots against PrimarySmtpAddress, EmailsAddresses, Name, Alias
+				if ($HasITGEmails) {
+					$O365Match = $O365Mailboxes | Where-Object { $_.PrimarySmtpAddress -like $PrimaryEmailRoot +'@*' }
+					if ($O365Match) { break; }
+					$O365Match = $O365Mailboxes | Where-Object { (@($_.EmailAddresses) -like $PrimaryEmailRoot +'@*').Count -eq 1 }
+					if ($O365Match) { break; }
+					$O365Match = $O365Mailboxes | Where-Object { $_.Name -like $PrimaryEmailRoot }
+					if ($O365Match) { break; }
+					$O365Match = $O365Mailboxes | Where-Object { $_.Alias -like $PrimaryEmailRoot }
+					if ($O365Match) { break; }
+					$O365Match = $O365Mailboxes | Where-Object { (@($EmailsRoot) -like $_.PrimarySmtpAddress.split("@")[0]).Count -eq 1 }
+					if ($O365Match) { break; }
+					$O365Match = $O365Mailboxes | Where-Object { (@($EmailsRoot) -like $_.Name).Count -eq 1 }
+					if ($O365Match) { break; }
+					$O365Match = $O365Mailboxes | Where-Object { (@($EmailsRoot) -like $_.Alias).Count -eq 1 }
+					if ($O365Match) { break; }
+				}
+				$O365Match = $O365Mailboxes | Where-Object { (@($CommonRoots) -like $_.PrimarySmtpAddress.split("@")[0]).Count -eq 1 }
+				if ($O365Match) { break; }
+				$O365Match = $O365Mailboxes | Where-Object { (@($CommonRoots) -like $_.Name).Count -eq 1 }
+				if ($O365Match) { break; }
+				$O365Match = $O365Mailboxes | Where-Object { (@($CommonRoots) -like $_.Alias).Count -eq 1 }
+				if ($O365Match) { break; }
+				if ($HasITGEmails) {
+					foreach ($Email in $EmailsRoot) {
+						$Intersect = $O365Mailboxes | Where-Object { (@($_.EmailAddresses) -like $Email +'@*').Count -gt 0}
+						if (($Intersect | Measure-Object).Count -eq 1) {
+							$O365Match = $Intersect
+							break
+						}
+					}
+					if ($O365Match) { break; }
+				}
+				foreach ($Root in $CommonRoots) {
+					$Intersect = $O365Mailboxes | Where-Object { (@($_.EmailAddresses) -like $Root +'@*').Count -gt 0}
+					if (($Intersect | Measure-Object).Count -eq 1) {
+						$O365Match = $Intersect
+						break
+					}
+				}
+				break;
+			}
+
+			# If more than 1 match, narrow down to 1
+			$O365Match = $O365Match | Sort-Object PrimarySmtpAddress -Unique
+			if ($O365Match -and ($O365Match | Measure-Object).Count -gt 1) {
+				# Try to narrow down by name, and then by account type (prefer user mailbox over shared mailbox)
+				$FilteredO365MatchByName = $O365Match | Where-Object { $_.FirstName -like $FirstName -and $_.LastName -like $LastName }
+				$FilteredO365MatchByType = $O365Match | Where-Object { $_.RecipientTypeDetails -like 'UserMailbox' }
+				if (($FilteredO365MatchByName | Measure-Object).Count -eq 1) {
+					$O365Match = $FilteredO365MatchByName
+				} elseif (($FilteredO365MatchByType | Measure-Object).Count -eq 1) {
+					$O365Match = $FilteredO365MatchByType
+				}
+
+				# If still too many, we'll just use the first
+				if (($O365Match | Measure-Object).Count -gt 1) {
+					$O365Match = $O365Match | Select-Object -First 1
+				}
+			}
+
+			# Add to the Match or NoMatch array
+			if ($O365Match) {
+				$match = [PSCustomObject]@{
+					id = $User.ID
+					name = $FullName
+					type = $Type
+					itglue = $User
+					o365 = $O365Match
+				}
+				$O365Matches.Add($match) | Out-Null
+			} else {
+				if ($Type -ne 'Terminated' -and $Type -ne "Employee - On Leave" -and $User.ID -in $EmployeeContacts.id) {
+					$NoO365Match += $User
+				}
+			}
+		}
+		$O365MatchCount = ($O365Matches | Measure-Object).Count
+		Write-Host "Finished matching all IT Glue contacts to their email accounts. $O365MatchCount matches were made."
+
+		# Get the existing unmatched O365 list from the user audit
+		$auditFilesPath = "C:\billing_audit\unmatchedO365.json"
+		$OldUnmatchedO365Emails = @()
+		if (Test-Path $auditFilesPath) {
+			$OldUnmatchedO365 = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+			if ($OldUnmatchedO365) {
+				$OldUnmatchedO365Emails = $OldUnmatchedO365.PrimarySmtpAddress
+			}
+		}
+
+		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 }
+		$UnmatchedO365 = $UnmatchedO365 | Where-Object { $_.PrimarySmtpAddress -notin $OldUnmatchedO365Emails } # filter out accounts that have already been reviewed
+	} else {
+		$CheckEmail = $false # Set to $false in case it is true and we aren't using unattended login
+	}
+
+	function buildMatch {
+		param($Contact)
+
+		$MatchToAdd = [pscustomobject]@{
+			"id" = $Contact.ID
+			"ITG-Name" = $Contact.name
+			"Type" = $Contact."contact-type-name"
+			"Title" = $Contact.title
+			"Location" = $Contact."location-name"
+			"ITG-Emails" = $Contact."contact-emails"
+		}
+
+		if ($script:CheckAD -and $script:ADMatches) {
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "AD-Connected?" -Value $null
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "AD-Name" -Value $null
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "AD-Username" -Value $null
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "AD-Email" -Value $null
+			
+			$ADMatch = ($script:ADMatches | Where-Object { $_.id -eq $Contact.ID }).ad
+			if ($ADMatch) {
+				$MatchToAdd."AD-Connected?" = $true
+				$Name = $ADMatch.name
+				$OtherName = $ADMatch.GivenName + " " + $ADMatch.Surname
+				if ($Name -notlike "*" + $OtherName + "*" -and $OtherName -notlike "*" + $Name + "*") {
+					$Name = $Name + " (" + $OtherName + ")"
+				}
+				$MatchToAdd."AD-Name" = $Name
+				$MatchToAdd."AD-Username" = $ADMatch.Username
+				$MatchToAdd."AD-Email" = $ADMatch.EmailAddress
+			} else {
+				$MatchToAdd."AD-Connected?" = $false
+			}
+		}
+
+		if ($script:CheckEmail -and $script:O365Matches) {
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "O365-Connected?" -Value $null
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "O365-Name" -Value $null
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "O365-PrimarySmtp" -Value $null
+			$MatchToAdd | Add-Member -MemberType NoteProperty -Name "O365-Emails" -Value $null
+			
+			$O365Match = ($script:O365Matches | Where-Object { $_.id -eq $Contact.ID }).o365
+			if ($O365Match) {
+				$MatchToAdd."O365-Connected?" = $true
+				$Name = $O365Match.FirstName + " " + $O365Match.LastName + " (" + $O365Match.name + ")"
+				$MatchToAdd."O365-Name" = $Name
+				$MatchToAdd."O365-PrimarySmtp" = $O365Match.PrimarySmtpAddress
+				$MatchToAdd."O365-Emails" = $O365Match.EmailAddresses
+			} else {
+				$MatchToAdd."O365-Connected?" = $false
+			}
+		}
+
+		$MatchToAdd | Add-Member -MemberType NoteProperty -Name "ITG-URL" -Value $null
+		$MatchToAdd | Add-Member -MemberType NoteProperty -Name "ITG-Notes" -Value $null
+		$MatchToAdd."ITG-URL" = $Contact."resource-url"
+		$MatchToAdd."ITG-Notes" = $Contact.notes
+
+		return $MatchToAdd
+	}
+
+	$FullMatches = New-Object -TypeName "System.Collections.ArrayList"
+	foreach ($Contact in $EmployeeContacts) {
+		$MatchToAdd = buildMatch $Contact
+		$FullMatches.Add($MatchToAdd) | Out-Null
+	}
+
+	Write-Host "All matches between IT Glue and AD have now been made. Audit commencing."
+
+	#############################################
+	##### Matches Made. Find Discrepancies. #####
+	#############################################
+
+	if ($FullMatches) {
+		$WarnContacts = New-Object -TypeName "System.Collections.Generic.List[Object] "
+
+		foreach ($Match in $FullMatches) {
+			$MatchID = $Match.id
+			$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $MatchID }
+			$ContactType = $Contact."contact-type-name"
+
+			if ($Contact.notes -like "*# Ignore Warnings*") {
+				continue;
+			}
+
+			$IgnoreWarnings = @()
+			if ($Contact.notes -match '\# Ignore ([\w\[\]]+) Warnings') {
+				$IgnoreTypes = ([regex]::Matches($Contact.notes, '\# Ignore ([\w\[\]]+) Warnings').Groups | Where-Object { "Groups" -notin $_.PSObject.Properties.Name }).Value
+				$IgnoreWarnings += $IgnoreTypes
+			}
+
+			###########
+			# AD Checks
+			if ($CheckAD) {
+				$ADMatch = ($ADMatches | Where-Object { $_.ID -eq $MatchID }).ad
+
+				$HasEmail = $false
+				$EmailEnabled = $false
+				if ($CheckEmail) {
+					$O365Match = ($O365Matches | Where-Object { $_.ID -eq $MatchID })
+					if ($O365Match) {
+						$HasEmail = $true
+						$EmailEnabled = ($O365Match.o365.AccountDisabled -eq $false)
+					}
+				}
+
+				if ($ADMatch) {
+					$WarnObj = @{
+						id = $MatchID
+						category = 'AD'
+						type = $false
+						reason = $false
+						name = $Contact.name
+					}
+
+					# If email only accounts might have an associated AD account, lets check if the groups make this look like an email only user
+					$EmailOnly = $false
+					if ($EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.PSObject.Properties.Name -contains "Groups") {
+						$EmployeeGroups = @()
+						foreach ($Group in $ADMatch.Groups) {
+							if (($EmailOnlyGroupsIgnore | ForEach-Object{$Group -like $_}) -notcontains $true ) {
+								$EmployeeGroups += $Group
+							}
+						}
+						if (($EmployeeGroups | Measure-Object).Count -eq 0) {
+							$EmailOnly = $true
+						}
+					}
+
+					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and 'ToTerminated' -notin $IgnoreWarnings) {
+						# ToTerminated
+						if ($ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave') {
+							$WarnObj.type = "ToTerminated"
+							$WarnObj.reason = "AD Account Disabled. Delete IT Glue contact or change type to 'Terminated'."
+						}
+					} elseif (($ADMatch.Name -like '*Disabled*' -or $ADMatch.Description -like '*Disabled*') -and 'ImproperlyTerminated' -notin $IgnoreWarnings) {
+						# ImproperlyTerminated
+						$WarnObj.type = "ImproperlyTerminated"
+						$WarnObj.reason = "AD Account Improperly Disabled. Please review and fix. (Description lists Disabled but account is not disabled.)"
+					} elseif ((!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly)) -and $ContactType -ne "Employee - On Leave" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+						# MaybeTerminate
+						$WarnObj.type = "MaybeTerminate"
+						$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
+						# If $InactivityO365Preference is $true, this gets skipped and will only be checked in the O365 section if the O365 account is inactive
+					} elseif ($ContactType -eq 'Terminated' -and 'ToEnabled' -notin $IgnoreWarnings) {
+						# ToEnabled
+						$WarnObj.type = "ToEnabled"
+						$WarnObj.reason = "AD Account Enabled. IT Glue Contact should not be 'Terminated'."
+					} elseif ($ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Contractor" -and $ContactType -notlike "Vendor" -and $EmailOnly -and 'ToEmailOnly' -notin $IgnoreWarnings) {
+						#ToEmailOnly
+						$WarnObj.type = "ToEmailOnly"
+						$WarnObj.reason = "AD account has no groups but an email account is setup. Consider changing the IT Glue Contact type to 'Employee - Email Only'."
+					} elseif (!$ContactType) {
+						#NoContactType
+						$WarnObj.type = "NoContactType"
+						$WarnObj.reason = "ITG has no contact type set for this contact but an AD account exists. Please audit this account."
+					}
+
+					if ($WarnObj.type) {
+						$WarnContacts.Add($WarnObj) | Out-Null
+					}
+				}
+			}
+
+			#############
+			# O365 Checks
+			if ($CheckEmail) {
+				$O365Match = ($O365Matches | Where-Object { $_.ID -eq $MatchID }).o365
+
+				$HasAD = $false
+				$ADEnabled = $false
+				if ($CheckAD) {
+					$ADMatch = $ADMatches | Where-Object { $_.ID -eq $MatchID }
+					if ($ADMatch) {
+						$HasAD = $true
+						$ADEnabled = $ADMatch.ad.Enabled
+					}
+				}
+
+				if (!$O365Match) { 
+					# If no O365 account or AD account:
+					# ToTerminated
+					if (!$HasAD -and $CheckAD -and $ContactType -ne 'Terminated') {
+						$WarnObj = @{
+							id = $MatchID
+							category = 'None'
+							type = "ToTerminated"
+							reason = "No O365 or AD account. Delete IT Glue contact or change type to 'Terminated'. Alternatively, this may be a Vendor Support account."
+							name = $Contact.name
+						}
+						$WarnContacts.Add($WarnObj) | Out-Null
+						continue;
+					} else {
+						# If no O365 account, just continue onto the next contact
+						continue;
+					}
+				}
+
+				# If email only accounts might have an associated AD account, lets check if the groups make this look like an email only user
+				$EmailOnly = $false
+				if ($EmailOnlyHaveAD -and $HasAD -and $ADEnabled -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.ad.PSObject.Properties.Name -contains "Groups") {
+					$EmployeeGroups = @()
+					foreach ($Group in $ADMatch.ad.Groups) {
+						if (($EmailOnlyGroupsIgnore | ForEach-Object{$Group -like $_}) -notcontains $true ) {
+							$EmployeeGroups += $Group
+						}
+					}
+					if (($EmployeeGroups | Measure-Object).Count -eq 0) {
+						$EmailOnly = $true
+					}
+				}
+
+				$WarnObj = @{
+					id = $MatchID
+					category = 'O365'
+					type = $false
+					reason = $false
+					name = $Contact.name
+				}
+
+				if ($O365Match.AccountDisabled -eq $true -and $O365Match.RecipientTypeDetails -like 'UserMailbox') {
+					if (!$HasAD -and 'ToTerminated' -notin $IgnoreWarnings) {
+						# ToTerminated
+						if ($ContactType -ne 'Terminated' -and $ContactType -ne "Employee - On Leave") {
+							$WarnObj.type = "ToTerminated"
+							$WarnObj.reason = "$EmailType Account Disabled. Delete IT Glue contact or change type to 'Terminated'."
+						}
+					} elseif ($HasAD -and $ADEnabled -and 'ImproperlyTerminated' -notin $IgnoreWarnings) {
+						# ImproperlyTerminated
+						$WarnObj.type = "ImproperlyTerminated"
+						$WarnObj.reason = "$EmailType Account Disabled Discrepancy. Please review and fix. (O365 Account Disabled but AD Account is Enabled.)"
+					}
+				} elseif ($O365Match.DisplayName -like '*Disabled*' -and $ContactType -ne 'Terminated' -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ImproperlyTerminated' -notin $IgnoreWarnings) {
+					# ImproperlyTerminated
+					$WarnObj.type = "ImproperlyTerminated"
+					$WarnObj.reason = "$EmailType Account Improperly Disabled. Please review and fix. (DisplayName lists Disabled but account is not disabled.)"
+				} elseif ($EmailType -eq 'O365' -and ($O365Match.PrimarySmtpAddress -like "no license" -or ($O365Match.AssignedLicenses | Measure-Object).count -eq 0 -or $O365Match.RecipientTypeDetails -like "None") -and $ContactType -ne 'Terminated' -and !$HasAD -and 'MaybeTerminate' -notin $IgnoreWarnings) {
+					# MaybeTerminate
+					$WarnObj.type = "MaybeTerminate"
+					$WarnObj.reason = "$EmailType Account is Unlicensed and no AD account is associated with this contact. Should this account be terminated? Consider changing the IT Glue type to 'Terminated'."
+				} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and 'MaybeTerminate' -notin $IgnoreWarnings) {
+					# MaybeTerminate
+					$WarnObj.type = "MaybeTerminate"
+					$WarnObj.reason = "$EmailType Account is a Shared Mailbox and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
+				} elseif ($O365Match.DeliverToMailboxAndForward -eq $false -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and ($O365Match.ForwardingSmtpAddress -or $O365Match.ForwardingAddress) -and $ContactType -ne "Employee - On Leave" -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[Forwarding]' -notin $IgnoreWarnings) {
+					# MaybeTerminate
+					$WarnObj.type = "MaybeTerminate[Forwarding]"
+					$WarnObj.reason = "$EmailType Account has forwarding setup and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated', or if temporary, to 'Employee - On Leave'."
+				} elseif ($O365Match.HiddenFromAddressListsEnabled -eq $true -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[GAL]' -notin $IgnoreWarnings) {
+					# MaybeTerminate
+					$WarnObj.type = "MaybeTerminate[GAL]"
+					$WarnObj.reason = "$EmailType Account is hidden from GAL and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
+				} elseif ($ContactType -eq 'Terminated' -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and (!$HasAD -or (!$ADEnabled -and $EmailType -ne 'Exchange')) -and ($EmailType -ne 'O365' -or ($O365Match.AssignedLicenses | Measure-Object) -eq 0) -and 'ToEnabled' -notin $IgnoreWarnings) {
+					# ToEnabled
+					$WarnObj.type = "ToEnabled"
+					$WarnObj.reason = "$EmailType Account Enabled. IT Glue Contact should not be 'Terminated'."
+				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -ne 'Terminated' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
+					# ToSharedMailbox
+					$WarnObj.type = "ToSharedMailbox"
+					$WarnObj.reason = "$EmailType account appears to be a shared mailbox. Consider changing the IT Glue Contact type to 'Internal / Shared Mailbox'."
+				} elseif ($ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and $CheckAD -and (!$HasAD -or $EmailOnly) -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
+					# ToEmailOnly
+					$WarnObj.type = "ToEmailOnly"
+					if ($EmailOnly) {
+						$WarnObj.reason = "$EmailType account has an associated AD account but it appears to be email-only. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
+					} else {	
+						$WarnObj.reason = "$EmailType account has no associated AD account. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
+					}
+				} elseif (!$ContactType -and !$HasAD) {
+					#NoContactType
+					$WarnObj.type = "NoContactType"
+					$WarnObj.reason = "ITG has no contact type set for this contact but an $EmailType account exists. Please audit this account."
+				}
+
+				if ($WarnObj.type) {
+					$Existing = $WarnContacts | Where-Object { $_.id -eq $MatchID }
+					if (!$Existing -or ($Existing -and $Existing.type -notlike $WarnObj.type)) {
+						if ($Existing -and ($WarnObj.type -eq 'MaybeTerminate' -or $WarnObj.type -eq 'ToTerminated')) {
+							if ($WarnObj.type -eq 'ToTerminated' -and $Existing.type -eq 'MaybeTerminate') {
+								$WarnContacts = [System.Collections.ArrayList] ($WarnContacts | Where-Object { $_.id -ne $MatchID })
+								$WarnContacts.Add($WarnObj) | Out-Null
+							} elseif ($WarnObj.type -ne 'MaybeTerminate' -or ($WarnObj.type -eq 'MaybeTerminate' -and $Existing.type -ne 'ToTerminated')) {
+								$WarnContacts.Add($WarnObj) | Out-Null
+							}
+						} else {
+							$WarnContacts.Add($WarnObj) | Out-Null
+						}
+					}
+				}
+			}
+
+			############
+			# IT Glue Note Checks
+			if ((($WarnContacts | Where-Object { $_.id -eq $MatchID }) | Measure-Object).Count -le 0) {
+				$WarnObj = @{
+					id = $MatchID
+					category = 'ITG'
+					type = $false
+					reason = $false
+					name = $Contact.name
+				}
+
+				if ($ContactType -ne 'Terminated' -and $ContactType -ne "Employee - On Leave" -and ($Contact.notes -like '*Disabled*' -or $Contact.title -like '*Disabled*') -and 'ImproperlyTerminated' -notin $IgnoreWarnings) {
+					# ImproperlyTerminated
+					$WarnObj.type = "ImproperlyTerminated"
+					$WarnObj.reason = "ITG contact notes list 'Disabled', yet this account is not terminated. Please review and fix."
+				} elseif (!$ContactType) {
+					#ToUnknown
+					$WarnObj.type = "NoContactType"
+					$WarnObj.reason = "ITG account has no contact type but no suggestion could be made. Please fix the type manually."
+				}
+
+				if ($WarnObj.type){
+					$WarnContacts.Add($WarnObj) | Out-Null
+				}
+			}
+		}
+
+		$WarnCount = ($WarnContacts | Measure-Object).Count
+		Write-Host "Audit complete. $($WarnCount) issues have been found."
+
+		if ($WarnCount -gt 0) {
+			$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
+			$WarnContacts = [Collections.Generic.List[Object]]@($WarnContacts)
+
+			# See what inactive accounts we warned on in the past and remove the related warnings
+			$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			$OldContactWarnings = @()
+			if (Test-Path $auditFilesPath) {
+				$OldContactWarnings = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+			}
+
+			$OldContactWarnings | Where-Object { $_.type -eq "MaybeTerminate" } | ForEach-Object {
+				$NewIndex = $WarnContacts.FindIndex( { $args[0].id -eq $_.id -and $args[0].type -eq $_.type -and $args[0].category -eq $_.category } )
+				if ($NewIndex -ge 0) {
+					[void]$WarnContacts.RemoveAt($NewIndex)
+				}
+			}
+
+			# Export a full list of what we just warned on and what we warned on in the past
+			New-Item -ItemType Directory -Force -Path "C:\billing_audit" | Out-Null
+			$AllContactWarnings = @(($WarnContacts | ConvertTo-Json | ConvertFrom-Json)) + $OldContactWarnings
+			$ContactWarningsJson = $AllContactWarnings | ConvertTo-Json
+			$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			$ContactWarningsJson | Out-File -FilePath $auditFilesPath
+			Write-Host "Exported contact warnings to a json file."
+
+			if ($WarnContacts) {
+				# Create some html for an email based on the $WarnContacts
+				$DueDate = $(get-date).AddDays(5).ToString("dddd, MMMM d")
+				$HTMLBody = ""
+
+				$WarnContacts | ForEach-Object {
+					$FullMatchID = $_.id
+					$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $FullMatchID }
+
+					$HTMLBody += '
+								<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+									<strong>Contact:</strong> {0}<br />
+									<strong>Issue Type:</strong> {1} (from {2} check)<br />
+									<strong>Issue:</strong> {3}<br />
+									<strong>ITG Link:</strong> <a href="{4}">{4}</a>
+								</p><br />' -f $_.name, $_.type, $_.category, $_.reason, $Contact."resource-url"
+				}
+				# Now lets add a table to the end
+				$HTMLBody += "<br /><br />"
+				$HTMLBody += '
+								<table class="desktop_only_table" cellpadding="0" cellspacing="0" style="border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: auto;">
+									<tbody>
+									<tr>
+										<th>Contact</th>
+										<th>Current Type</th>
+										<th>AD Username</th>
+										<th>O365 Email</th>
+										<th>Issue Type</th>
+										<th>From Check</th>
+										<th>Issue</th>
+										<th>ITG Link</th>
+									</tr>'
+				$WarnContacts | ForEach-Object {
+					$FullMatchID = $_.id
+					$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $FullMatchID }
+					$ContactID = $Contact.id
+					if ($CheckEmail) {
+						$O365Match = ($O365Matches | Where-Object { $_.ID -eq $ContactID }).o365
+					}
+					if ($CheckAD) {
+						$ADMatch = ($ADMatches | Where-Object { $_.ID -eq $ContactID }).ad
+					}
+
+					$ADUsername = 'N/A'
+					$O365Email = 'N/A'
+					if ($CheckAD -and $ADMatch) {
+						$ADUsername = $ADMatch.Username
+					}
+					if ($CheckEmail -and $O365Match) {
+						$O365Email = $O365Match.PrimarySmtpAddress
+					}
+
+					$HTMLBody += '
+									<tr>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{0}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{1}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{2}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{3}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{4}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{5}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{6}</td>
+										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;"><a href="{7}">{7}</a></td>
+									</tr>' -f $_.name, $Contact."contact-type-name", $ADUsername, $O365Email, $_.type, $_.category, $_.reason, $Contact."resource-url"
+				}
+				$HTMLBody += '
+									</tbody>
+								</table>
+								<div class="mobile_table_fallback" style="display: none;">
+									Table version hidden. You can view a tabular version of the above data on a desktop.
+								</div><br />'
+
+				# If there were unmatched AD accounts, lets output those as well
+				if (($UnmatchedAD | Measure-Object).Count -gt 0) {
+					$HTMLBody += '<br />
+							<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>Unmatched AD Accounts Found</strong></p>
+							<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								The following AD accounts do not appear to have an associated contact in ITG. Please review and add an ITG contact if necessary.
+								The next time this report runs these unmatched accounts will be ignored.
+							</p>
+							<ul>
+					'
+					foreach ($ADAccount in $UnmatchedAD) {
+						$HTMLBody += "<li><u>$($ADAccount.Name)</u> ($($ADAccount.EmailAddress)) (Last Logon: $($ADAccount.LastLogonDate)) ($($ADAccount.Description))</li>"
+					}
+					$HTMLBody += '</ul><br />'
+				}
+
+				$EmailIntro = "Contact discrepancies were found at <strong>$OrgFullName</strong>. These will affect billing. Please review each and fix. A tabular summary is at the end of this email.
+							<br /><br />Please correct these issues before <strong>$DueDate</strong>, at that time billing will be updated based on the ITG contact list. 
+							Note that any issues you ignore now will not be reported on next month."							
+
+				$HTMLEmail = $EmailTemplate -f `
+								$EmailIntro, 
+								"Contact Issues Found:", 
+								$HTMLBody, 
+								""
+				$EmailSubject = "Contact Issues Found @ $OrgFullName"
+
+				# Send email
+				$mailbody = @{
+					"From" = $EmailFrom
+					"To" = $EmailTo_Audit
+					"Subject" = $EmailSubject
+					"HTMLContent" = $HTMLEmail
+				} | ConvertTo-Json -Depth 6
+
+				$headers = @{
+					'x-api-key' = $Email_APIKey
+				}
+				
+				Invoke-RestMethod -Method Post -Uri $Email_APIEndpoint -Body $mailbody -Headers $headers -ContentType application/json
+				Write-Host "Sent Email" -ForegroundColor Green
+			}
+		}
+	}
+
+	Write-Host "User Audit Complete!" -ForegroundColor Black -BackgroundColor Green
+}
+# END device audit
+
+
+################
+#### Running a Billing Update
+#### This will get the contact list from ITG and update the billing document
+#### If there were changes from last month it will send an email to accounting
+#### Use parameter -BillingUpdate $true   (default off)
+####
+#### Note: This code is almost directly pulled from the User Audit powershell script
+####		The only difference is a small amount of code to check for changes and send an email at the end if changes were found
+####		Search "Custom Code" to find this bit of code
+####
+#### TODO: Move this code into an external function that both this script and the User Audit script can use instead of copying the code
+################
+if ($BillingUpdate) {
+	If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
+	
+	# Get a fresh list of contacts from IT Glue
+	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
+
+	# Export a csv into the billing history folder (overwrite if same month)
+	New-Item -ItemType Directory -Force -Path "C:\billing_history" | Out-Null
+	$Month = Get-Date -Format "MM"
+	$Year = Get-Date -Format "yyyy"
+	$historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data | ConvertTo-Json
+	$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
+	$historyContacts | Out-File -FilePath $historyPath
+	Write-Host "Exported a billing history file."
+
+	# Export billing user list to CSV
+	Write-Host "Generating billing report..."
+
+	# First get the history file if it exists to perform a diff
+	$Month = Get-Date -Format "MM"
+	$Year = Get-Date -Format "yyyy"
+	$LastMonth = '{0:d2}' -f ([int]$Month - 1)
+	$LastYear = $Year
+	if ([int]$Month -eq 1) {
+		$LastMonth = "12"
+		$LastYear = $Year - 1
+	}
+	$CheckChanges = $false
+	$historyPath = "C:\billing_history\contacts_$($LastMonth)_$($LastYear).json"
+	if (Test-Path $historyPath) {
+		$CheckChanges = $true
+		$HistoryContactList = Get-Content -Path $historyPath -Raw | ConvertFrom-Json
+	}
+
+	if ($CheckChanges) {
+		$HistoryContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+		$HistoryContactList | ForEach-Object { $_.attributes.id = $_.id }
+		$HistoryContactList = $HistoryContactList.attributes
+		$HistoryChanges = Compare-Object $HistoryContactList $FullContactList.attributes -Property id, name, contact-type-name
+	}
+	$BilledEmployees = $FullContactList.attributes | Where-Object {$_."contact-type-name" -in $BilledContactTypes}
+	$UnbilledEmployees = $FullContactList.attributes | Where-Object {$_."contact-type-name" -in $UnbilledContactTypes -or !$_."contact-type-name"}
+	$NonEmployees = $FullContactList.attributes | Where-Object {$_."contact-type-name" -notin $BilledContactTypes -and $_."contact-type-name" -notin $UnbilledContactTypes -and $_."contact-type-name" -notlike "Terminated"}
+
+	# Put together the object lists for the billed and unbilled users
+	$billedCsvTable = @()
+	$movedToBilledUser = @()
+	$fixedUser = @()
+	foreach ($User in $BilledEmployees) {
+
+		$Type = $User."contact-type-name"
+		if ($Type -in $ConvertToEmployeeTypes) {
+			$Type = "Employee"
+		}
+
+		$properties = [ordered]@{
+			"Name" = $User.name
+			"Type" = $Type
+			"Title" = $User.title
+		}
+		if ($HasMultipleLocations) {
+			$properties.Location = $User."location-name"
+		}
+
+		if ($CheckChanges) {
+			$properties."New?" = ""
+			if ($User.id -notin $HistoryContactList.id) {
+				$properties."New?" = "Yes"
+			}
+			if ($User.id -in $HistoryContactList.id) { 
+				$HistoryType = ($HistoryContactList | Where-Object { $_.id -eq $User.id })."contact-type-name"
+				if ($HistoryType -and $HistoryType -in $UnbilledContactTypes) {
+					$properties.Type = $HistoryType
+					$movedToBilledUser += New-Object PSObject -Property $properties
+					$properties.Type = $Type
+					$properties."New?" = "Yes (was unbilled)"				
+				} elseif ($HistoryType -eq "Terminated") {
+					$properties."New?" = "Yes (was terminated)"
+				} elseif ($HistoryType -and $HistoryType -notin $BilledContactTypes) {
+					$properties."New?" = "Yes (was $($HistoryType))"
+				} elseif (!$HistoryType) {
+					$properties."New?" = "Yes (was unknown)"
+					$fixedUser += New-Object PSObject -Property $properties
+				}
+			}
+		}
+
+		$csvRow = New-Object PSObject -Property $properties
+		$billedCsvTable += $csvRow
+	}
+
+	$unbilledCsvTable = @()
+	$movedToUnbilledUser = @()
+	foreach ($User in $UnbilledEmployees) {
+
+		$Type = $User."contact-type-name"
+		if (!$Type) {
+			$Type = "Unknown"
+		}
+
+		$properties = [ordered]@{
+			"Name" = $User.name
+			"Type" = $Type
+			"Title" = $User.title
+		}
+		if ($HasMultipleLocations) {
+			$properties.Location = $User."location-name"
+		}
+
+		if ($CheckChanges) {
+			$properties."New?" = ""
+			if ($User.id -notin $HistoryContactList.id) {
+				$properties."New?" = "Yes"
+			}
+			if ($User.id -in $HistoryContactList.id) {
+				$HistoryType = ($HistoryContactList | Where-Object { $_.id -eq $User.id })."contact-type-name"
+				if ($HistoryType -and $HistoryType -in $BilledContactTypes) {
+					$properties.Type = $HistoryType
+					$movedToUnbilledUser += New-Object PSObject -Property $properties
+					$properties.Type = $Type
+					$properties."New?" = "Yes (was billed)"
+				} elseif ($HistoryType -eq "Terminated") {
+					$properties."New?" = "Yes (was terminated)"
+				} elseif ($HistoryType -and $HistoryType -notin $UnbilledContactTypes) {
+					$properties."New?" = "Yes (was $($HistoryType))"
+				} elseif (!$HistoryType) {
+					$properties."New?" = "Yes (was unknown)"
+					$fixedUser += New-Object PSObject -Property $properties
+				}
+			}
+		}
+
+		$csvRow = New-Object PSObject -Property $properties
+		$unbilledCsvTable += $csvRow
+	}
+
+	$movedToNonEmployee = @()
+	if ($CheckChanges -and $NonEmployees) {
+		foreach ($User in $NonEmployees) {
+
+			$Type = $User."contact-type-name"
+			$properties = [ordered]@{
+				"Name" = $User.name
+				"Type" = $Type
+				"Title" = $User.title
+			}
+			if ($HasMultipleLocations) {
+				$properties.Location = $User."location-name"
+			}
+
+			if ($User.id -in $HistoryContactList.id) {
+				$HistoryType = ($HistoryContactList | Where-Object { $_.id -eq $User.id })."contact-type-name"
+				if ($HistoryType -in $BilledContactTypes -or $HistoryType -in $UnbilledContactTypes) {
+					$properties.Type = $HistoryType
+					if (!$HistoryType) {
+						$properties.Type = "Unknown"
+						$fixedUser += New-Object PSObject -Property $properties
+					} else {
+						$movedToNonEmployee += New-Object PSObject -Property $properties
+					}
+				}
+			}
+		}
+	}
+
+	$unbilledToTerminated = @()
+	$billedToTerminated = @()
+	if ($CheckChanges -and $HistoryChanges) {
+		# get the tables of terminated users
+		$BecameTerminated = @()
+		$BecameTerminated += $HistoryChanges | Where-Object { $_."contact-type-name" -like "Terminated" -and $_.SideIndicator -eq "=>" }
+		$UniqueAccounts = $HistoryChanges.id | Group-Object | Where-Object { $_.Count -eq 1 } | Select-Object -ExpandProperty Group
+		$BecameTerminated += $HistoryChanges | Where-Object { $_.id -in $UniqueAccounts -and $_.SideIndicator -eq "<=" -and $_."contact-type-name" -notlike "Terminated" }
+
+		foreach ($User in $BecameTerminated) {
+			$HistoryUser = $HistoryContactList | Where-Object { $_.id -eq $User.id }
+
+			$Type = $HistoryUser."contact-type-name"
+			if ($Type -in $ConvertToEmployeeTypes) {
+				$Type = "Employee"
+			} elseif (!$Type) {
+				$Type = "Unknown"
+			}
+
+			$properties = [ordered]@{
+				"Name" = $HistoryUser.name
+				"Past Type" = $Type
+			}
+			if ($HasMultipleLocations) {
+				$properties.Location = $HistoryUser."location-name"
+			}
+			$csvRow = New-Object PSObject -Property $properties
+
+			if ($HistoryUser."contact-type-name" -in $BilledContactTypes) {
+				$billedToTerminated += $csvRow
+			} else {
+				$unbilledToTerminated += $csvRow
+			}
+		}
+	}
+
+	# get totals for totals table
+	$Totals = @()
+	$TotalTypes = Compare-Object -ReferenceObject $BilledContactTypes -DifferenceObject $ConvertToEmployeeTypes -PassThru
+	$TotalTypes += $UnbilledContactTypes
+
+	foreach ($Type in $TotalTypes) {
+		if (!$Type) { continue; }
+		if ($Type -in $BilledContactTypes) {
+			$Totals += [PSCustomObject]@{
+				Type = $Type
+				Billed = ($billedCsvTable | Where-Object { $_.Type -eq $Type } | Measure-Object).Count
+				Unbilled = $null
+			}
+		} else {
+			$Totals += [PSCustomObject]@{
+				Type = $Type
+				Billed = $null
+				Unbilled = ($unbilledCsvTable | Where-Object { $_.Type -eq $Type } | Measure-Object).Count
+			}
+		}
+	}
+	$Totals += [PSCustomObject]@{
+		Type = "Unknown"
+		Billed = $null
+		Unbilled = ($unbilledCsvTable | Where-Object { !$_.Type -or $_.Type -eq "Unknown" } | Measure-Object).Count
+	}
+
+
+	# calculate total changes
+	if ($CheckChanges) {
+		$TotalChanges = @()
+		$TotalChanges += [PSCustomObject]@{
+			Month = (Get-Culture).DateTimeFormat.GetAbbreviatedMonthName([int]$LastMonth)
+			"Billed FT" = ($HistoryContactList | Where-Object { $_."contact-type-name" -in $BilledContactTypes -and $_."contact-type-name" -notlike "*Part Time*" } | Measure-Object).Count
+			"Billed PT" = ($HistoryContactList | Where-Object { $_."contact-type-name" -in $BilledContactTypes -and $_."contact-type-name" -like "*Part Time*" } | Measure-Object).Count
+			Unbilled = ($HistoryContactList | Where-Object { $_."contact-type-name" -in $UnbilledContactTypes -or !$_."contact-type-name" } | Measure-Object).Count
+		}
+		$TotalChanges += [PSCustomObject]@{
+			Month = (Get-Culture).DateTimeFormat.GetAbbreviatedMonthName([int]$Month)
+			"Billed FT" = ($FullContactList.attributes | Where-Object { $_."contact-type-name" -in $BilledContactTypes -and $_."contact-type-name" -notlike "*Part Time*" } | Measure-Object).Count
+			"Billed PT" = ($FullContactList.attributes | Where-Object { $_."contact-type-name" -in $BilledContactTypes -and $_."contact-type-name" -like "*Part Time*" } | Measure-Object).Count
+			Unbilled = ($FullContactList.attributes | Where-Object { $_."contact-type-name" -in $UnbilledContactTypes -or !$_."contact-type-name" } | Measure-Object).Count
+		}
+		$TotalChanges += [PSCustomObject]@{
+			Month = "Total"
+			"Billed FT" = $TotalChanges[1]."Billed FT" - $TotalChanges[0]."Billed FT"
+			"Billed PT" = $TotalChanges[1]."Billed PT" - $TotalChanges[0]."Billed PT"
+			Unbilled = $TotalChanges[1].Unbilled - $TotalChanges[0].Unbilled
+		}
+	}
+
+	# Create the excel document
+	$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int](Get-Date -Format MM))
+	$Year = Get-Date -Format yyyy
+	$FileName = "$($OrgShortName)--Billed_User_List--$($MonthName)_$Year.xlsx"
+	$Path = $PSScriptRoot + "\$FileName"
+	Remove-Item $Path -ErrorAction SilentlyContinue
+
+	$excel = $Totals | Export-Excel -Path $Path -WorksheetName "Billed Employees" -AutoSize -StartRow 4 -PassThru
+	$ws = $excel.Workbook.Worksheets['Billed Employees']
+
+	$xlParams = @{WorkSheet=$ws; Bold=$true; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#44546A"); FontSize=20; HorizontalAlignment="Center"; Merge=$true}
+	Set-ExcelRange -Range "A1:H1" -Value "$($OrgFullName) - Billed User List ($($MonthName))" @xlParams 
+	$totalsTblLastRow = (($TotalTypes | Measure-Object).Count + 5)
+
+	# totals title
+	$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#548235"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#375623"); FontSize=15; HorizontalAlignment="Center"; Merge=$true}
+	Set-ExcelRange -Range "A3:C3" -Value "Totals" @xlParams
+
+	# totals table
+	Add-ExcelTable -PassThru -Range $ws.Cells["A4:C$($totalsTblLastRow)"] -TableName Totals -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
+	$totalsTblLastRow += 1
+	$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
+	Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
+
+	if ($CheckChanges) {
+		# total changes title
+		$ChangesTitle = "Changes (" + $TotalChanges[0].Month + " to " + $TotalChanges[1].Month + ")"
+		$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#548235"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#375623"); FontSize=15; HorizontalAlignment="Center"; Merge=$true}
+		Set-ExcelRange -Range "F3:H3" -Value $ChangesTitle @xlParams
+
+		# total changes table
+		$excel = $TotalChanges | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow 4 -StartColumn 6
+		Add-ExcelTable -PassThru -Range $ws.Cells["F4:I7"] -TableName TotalChanges -TableStyle "Light21" -ShowFilter:$false -ShowFirstColumn | Out-Null
+		$xlParams = @{WorkSheet=$ws; Bold=$true; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E"); BorderTop="Double"; BorderBottom="Hair"; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#70AD47")}
+		Set-ExcelRange -Range "F7:I7" @xlParams
+		Set-ExcelRange -Range "G7:I7" -Worksheet $ws -NumberFormat "+0;-0;0"
+
+		$ctGt = New-ConditionalText -Range "G7:I7" -ConditionalType "GreaterThan" -Text "0"
+		$ctColors = @{BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#FFEB9C"); ConditionalTextColor=[System.Drawing.ColorTranslator]::FromHtml("#9C5700")}
+		$ctLt = New-ConditionalText -Range "G7:I7" -ConditionalType "LessThan" -Text "0" @ctColors
+		$excel = Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -ConditionalText $ctGt, $ctLt
+
+		$SmallTableLastCol = "B"
+		if ($HasMultipleLocations) {
+			$SmallTableLastCol = "C"
+		}
+	}
+
+	# billed employees title and table
+	$TableLastCol = "C"
+	if ($HasMultipleLocations -and $CheckChanges) {
+		$TableLastCol = "E"
+	} elseif ($HasMultipleLocations -or (!$HasMultipleLocations -and $CheckChanges)) {
+		$TableLastCol = "D"
+	}
+	$billedEmployeesTblFirstRow = $totalsTblLastRow + 4
+	$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#4472C4"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#44546A"); FontSize=15; HorizontalAlignment="Center"; Merge=$true}
+	Set-ExcelRange -Range "A$($billedEmployeesTblFirstRow):$($TableLastCol)$($billedEmployeesTblFirstRow)" -Value "Billed Employees" @xlParams
+	$billedEmployeesTblFirstRow += 2
+
+	$billedEmployeesTable = $billedCsvTable | Sort-Object Type, @{Expression="New?";Descending=$true}, Name
+	$billedEmployeesTblLastRow = $billedEmployeesTblFirstRow + ($billedEmployeesTable | Measure-Object).Count
+	$tableName = "BilledEmployees"
+	$excel = $billedEmployeesTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $billedEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium2"
+	
+	if ($CheckChanges) {
+		$ctColors = @{ForegroundColor=[System.Drawing.ColorTranslator]::FromHtml("#548235")}
+		$ctFormula = '=ISNUMBER(SEARCH("Yes",$' + $TableLastCol + '' + ($billedEmployeesTblFirstRow+1) + '))'
+		Add-ConditionalFormatting -Address "A$($billedEmployeesTblFirstRow+1):$($TableLastCol)$($billedEmployeesTblLastRow)" -Worksheet $ws -RuleType Expression -ConditionValue $ctFormula -Bold @ctColors
+		$billedEmployeesTblFirstRow = $billedEmployeesTblLastRow + 2
+	}
+
+	if ($CheckChanges) {
+		$LastMonthName = (Get-Culture).DateTimeFormat.GetMonthName([int]$LastMonth)
+		$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int]$Month)
+		if ($billedToTerminated) {
+			$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#C65911"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#C00000"); FontSize=13; HorizontalAlignment="Center"; Merge=$true}
+			Set-ExcelRange -Range "A$($billedEmployeesTblFirstRow):$($SmallTableLastCol)$($billedEmployeesTblFirstRow)" -Value "Terminated Employees*" @xlParams
+			$billedEmployeesTblFirstRow += 1
+
+			$terminatedTable = $billedToTerminated | Select-Object Name, "Past Type", Location
+			if (!$HasMultipleLocations) {
+				$terminatedTable = $terminatedTable | Select-Object Name, "Past Type"
+			}
+			$billedEmployeesTblLastRow = $billedEmployeesTblFirstRow + ($terminatedTable | Measure-Object).Count
+			$tableName = "BilledTerminatedEmployees"
+			$excel = $terminatedTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $billedEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium3"
+			$xlColors = @{FontColor=[System.Drawing.ColorTranslator]::FromHtml("#C00000")}
+			Set-ExcelRange -Range "A$($billedEmployeesTblFirstRow+1):$($SmallTableLastCol)$($billedEmployeesTblLastRow)" -Worksheet $ws -Bold @xlColors
+			$billedEmployeesTblLastRow += 1
+
+			Set-ExcelRange -Range "A$($billedEmployeesTblLastRow)" -Worksheet $ws -Value "* These employees are no longer billed and were terminated between $($LastMonthName) and $($MonthName)."
+			$billedEmployeesTblFirstRow = $billedEmployeesTblLastRow + 2
+		}	
+
+		if ($movedToUnbilledUser) {
+			$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#BF8F00"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#806000"); FontSize=13; HorizontalAlignment="Center"; Merge=$true}
+			Set-ExcelRange -Range "A$($billedEmployeesTblFirstRow):$($SmallTableLastCol)$($billedEmployeesTblFirstRow)" -Value "Moved to Unbilled Employees" @xlParams
+			$billedEmployeesTblFirstRow += 1
+
+			$movedTable = $movedToUnbilledUser | Add-Member -MemberType AliasProperty -Name "Past Type" -Value Type -PassThru | Select-Object Name, "Past Type", Location
+			if (!$HasMultipleLocations) {
+				$movedTable = $movedTable | Select-Object Name, "Past Type"
+			}
+			$billedEmployeesTblLastRow = $billedEmployeesTblFirstRow + ($movedTable | Measure-Object).Count
+			$tableName = "BilledMovedToUnbilled"
+			$excel = $movedTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $billedEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium5"
+			$billedEmployeesTblFirstRow = $billedEmployeesTblLastRow + 2
+		}
+	}
+
+	# unbilled employees title and table
+	if ($unbilledCsvTable) {
+		$unbilledEmployeesTblFirstRow = $billedEmployeesTblLastRow + 4
+		$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#4472C4"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#44546A"); FontSize=15; HorizontalAlignment="Center"; Merge=$true}
+		Set-ExcelRange -Range "A$($unbilledEmployeesTblFirstRow):$($TableLastCol)$($unbilledEmployeesTblFirstRow)" -Value "Unbilled Employees" @xlParams
+		$unbilledEmployeesTblFirstRow += 2
+
+		$unbilledEmployeesTable = $unbilledCsvTable | Sort-Object Type, @{Expression="New?";Descending=$true}, Name
+		$unbilledEmployeesTblLastRow = $unbilledEmployeesTblFirstRow + ($unbilledEmployeesTable | Measure-Object).Count
+		$tableName = "UnbilledEmployees"
+		$excel = $unbilledEmployeesTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $unbilledEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium2"
+		$ctColors = @{ForegroundColor=[System.Drawing.ColorTranslator]::FromHtml("#548235")}
+		$ctFormula = '=ISNUMBER(SEARCH("Yes",$' + $TableLastCol + '' + ($unbilledEmployeesTblFirstRow+1) + '))'
+		Add-ConditionalFormatting -Address "A$($unbilledEmployeesTblFirstRow+1):$($TableLastCol)$($unbilledEmployeesTblLastRow)" -Worksheet $ws -RuleType Expression -ConditionValue $ctFormula -Bold @ctColors
+		$unbilledEmployeesTblFirstRow = $unbilledEmployeesTblLastRow + 2
+	} else {
+		$unbilledEmployeesTblFirstRow = $billedEmployeesTblLastRow + 4
+	}
+	
+	if ($CheckChanges) {
+		if ($unbilledToTerminated) {
+			$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#C65911"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#C00000"); FontSize=13; HorizontalAlignment="Center"; Merge=$true}
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblFirstRow):$($SmallTableLastCol)$($unbilledEmployeesTblFirstRow)" -Value "Terminated Accounts*" @xlParams
+			$unbilledEmployeesTblFirstRow += 1
+			
+			$terminatedTable = $unbilledToTerminated | Select-Object Name, "Past Type", Location
+			if (!$HasMultipleLocations) {
+				$terminatedTable = $terminatedTable | Select-Object Name, "Past Type"
+			}
+			$unbilledEmployeesTblLastRow = $unbilledEmployeesTblFirstRow + ($terminatedTable | Measure-Object).Count
+			$tableName = "UnbilledTerminatedEmployees"
+			$excel = $terminatedTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $unbilledEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium3"
+			$xlColors = @{FontColor=[System.Drawing.ColorTranslator]::FromHtml("#C00000")}
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblFirstRow+1):$($SmallTableLastCol)$($unbilledEmployeesTblLastRow)" -Worksheet $ws -Bold @xlColors
+			$unbilledEmployeesTblLastRow += 1
+
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblLastRow)" -Worksheet $ws -Value "* These unbilled employee accounts were removed between $($LastMonthName) and $($MonthName)."
+			$unbilledEmployeesTblFirstRow = $unbilledEmployeesTblLastRow + 2
+		}	
+
+		if ($movedToBilledUser) {
+			$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#BF8F00"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#806000"); FontSize=13; HorizontalAlignment="Center"; Merge=$true}
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblFirstRow):$($SmallTableLastCol)$($unbilledEmployeesTblFirstRow)" -Value "Moved to Billed Employees" @xlParams
+			$unbilledEmployeesTblFirstRow += 1
+
+			$movedTable = $movedToBilledUser | Add-Member -MemberType AliasProperty -Name "Past Type" -Value Type -PassThru | Select-Object Name, "Past Type", Location
+			if (!$HasMultipleLocations) {
+				$movedTable = $movedTable | Select-Object Name, "Past Type"
+			}
+			$unbilledEmployeesTblLastRow = $unbilledEmployeesTblFirstRow + ($movedTable | Measure-Object).Count
+			$tableName = "UnbilledMovedToBilled"
+			$excel = $movedTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $unbilledEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium5"
+			$unbilledEmployeesTblFirstRow = $unbilledEmployeesTblLastRow + 2
+		}
+
+		if ($movedToNonEmployee) {
+			$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#BF8F00"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#806000"); FontSize=13; HorizontalAlignment="Center"; Merge=$true}
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblFirstRow):$($SmallTableLastCol)$($unbilledEmployeesTblFirstRow)" -Value "Moved to Non-Employee" @xlParams
+			$unbilledEmployeesTblFirstRow += 1
+
+			$movedTable = $movedToNonEmployee | Add-Member -MemberType AliasProperty -Name "Past Type" -Value Type -PassThru | Select-Object Name, "Past Type", Location
+			if (!$HasMultipleLocations) {
+				$movedTable = $movedTable | Select-Object Name, "Past Type"
+			}
+			$unbilledEmployeesTblLastRow = $unbilledEmployeesTblFirstRow + ($movedTable | Measure-Object).Count
+			$tableName = "UnbilledMovedToNonEmployee"
+			$excel = $movedTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $unbilledEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium5"
+			$unbilledEmployeesTblFirstRow = $unbilledEmployeesTblLastRow + 2
+		}
+
+		if ($fixedUser) {
+			$FixedTableLastCol = "A"
+			if ($HasMultipleLocations) {
+				$FixedTableLastCol = "B"
+			}
+			$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#A2B8E1"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#44546A"); FontSize=13; HorizontalAlignment="Center"; Merge=$true}
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblFirstRow):$($FixedTableLastCol)$($unbilledEmployeesTblFirstRow)" -Value "Fixed Accounts*" @xlParams
+			$unbilledEmployeesTblFirstRow += 1
+
+			$fixedTable = $fixedUser | Select-Object Name, Location
+			if (!$HasMultipleLocations) {
+				$fixedTable = $fixedTable | Select-Object Name
+			}
+			$unbilledEmployeesTblLastRow = $unbilledEmployeesTblFirstRow + ($fixedTable | Measure-Object).Count
+			$tableName = "FixedAccounts"
+			$excel = $fixedTable | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $unbilledEmployeesTblFirstRow -TableName $tableName -TableStyle "Medium4"
+			$unbilledEmployeesTblLastRow += 1
+
+			Set-ExcelRange -Range "A$($unbilledEmployeesTblLastRow)" -Worksheet $ws -Value "* These accounts were marked as 'Unknown' last month but have since been fixed."
+			$unbilledEmployeesTblFirstRow = $unbilledEmployeesTblLastRow + 2
+		}
+	}
+
+	Close-ExcelPackage $excel
+	Write-Host "Excel Report Exported." -ForegroundColor Green
+
+	#######
+	### Upload billing report to ITG
+	########
+
+	# Get the info for the fields
+	$TotalBilled = 0
+	$TotalUnbilled = 0
+	$Totals.Billed | ForEach-Object { $TotalBilled += $_ }
+	$Totals.Unbilled | ForEach-Object { $TotalUnbilled += $_ }
+	
+	$UserBreakdownTable = "
+		<table class='table table-striped'>
+			<thead>
+				<tr>
+				<th>Type</th>
+				<th>Billed</th>
+				<th>Unbilled</th>
+				</tr>
+			</thead>
+			<tbody>"
+
+	foreach ($BillingType in $Totals) {
+		$UserBreakdownTable += "
+			<tr>
+				<th>$($BillingType.Type)</th>
+				<td>$($BillingType.Billed)</td>
+				<td>$($BillingType.Unbilled)</td>
+			</tr>"
+	}
+	$UserBreakdownTable += "
+			<tr style='background-color: #e9e9e9'>
+				<th style='background-color: #e9e9e9'><u>Totals</u></th>
+				<td><strong><u>$TotalBilled</u></strong></td>
+				<td><strong><u>$TotalUnbilled</u><strong></td>
+			</tr>"
+	$UserBreakdownTable += "
+			</tbody>
+		</table>"
+
+	$ReportEncoded = [System.Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
+
+	# Get the existing info if it exists (anything that isn't updated will just get deleted, not left alone)
+	$FlexAssetName = "Customer Billing"
+	$FilterID = (Get-ITGlueFlexibleAssetTypes -filter_name $FlexAssetName).data
+	if ($FilterID) {
+		$FlexAssetBody 	= 
+		@{
+			type 		= 'flexible-assets'
+			attributes	= @{
+				traits	= @{
+
+				}
+			}
+		}
+		
+		$ExistingFlexAsset = (Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $FilterID.id -filter_organization_id $OrgID -include attachments) | Select-Object -First 1
+		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.attributes.traits) {
+			$ExistingFlexAsset.data.attributes.traits.PSObject.Properties | ForEach-Object {
+				if ($_.name -eq "billing-report-user-list") {
+					return
+				}
+				$property = $_.name
+				$FlexAssetBody.attributes.traits.$property = $_.value
+			}
+		}
+
+		# Add the new data to be uploaded
+		$FlexAssetBody.attributes.traits."number-of-billed-users" = $TotalBilled
+		$FlexAssetBody.attributes.traits."user-breakdown" = $UserBreakdownTable
+		$FlexAssetBody.attributes.traits."billing-report-user-list" = @{
+			content 	= $ReportEncoded
+			file_name 	= $FileName
+		}
+
+		# If billing report is already an attachment, delete so we can replace it
+		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.id -and $ExistingFlexAsset.included) {
+			$Attachments = $ExistingFlexAsset.included | Where-Object {$_.type -eq 'attachments'}
+			if ($Attachments -and ($Attachments | Measure-Object).Count -gt 0 -and $Attachments.attributes) {
+				$MonthsAttachment = $Attachments.attributes | Where-Object { $_.name -like $FileName + '*' -or $_."attachment-file-name" -like $FileName + '*' }
+				if ($MonthsAttachment) {
+					$data = @{ 
+						'type' = 'attachments'
+						'attributes' = @{
+							'id' = $MonthsAttachment.id
+						}
+					}
+					Remove-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingFlexAsset.data.id -data $data | Out-Null
+				}
+			}
+		}
+
+		# Upload
+		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.id) {
+			Set-ITGlueFlexibleAssets -id $ExistingFlexAsset.data.id -data $FlexAssetBody | Out-Null
+			Write-Host "Updated existing $FlexAssetName asset."
+		} else {
+			$FlexAssetBody.attributes."organization-id" = $OrgID
+			$FlexAssetBody.attributes."flexible-asset-type-id" = $FilterID.id
+			$FlexAssetBody.attributes.traits."billed-by" = "User"
+			$ExistingFlexAsset = New-ITGlueFlexibleAssets -data $FlexAssetBody
+			Write-Host "Uploaded a new $FlexAssetName asset."
+		}
+
+		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.id) {
+			$data = @{ 
+				'type' = 'attachments'
+				'attributes' = @{
+					'attachment' = @{
+						'content' = $ReportEncoded
+						'file_name'	= $FileName
+					}
+				}
+			}
+			New-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingFlexAsset.data.id -data $data | Out-Null
+			Write-Host "Billing report uploaded and attached." -ForegroundColor Green
+		}
+
+		# If there were changes to the amount of billed users, send an email to account (or if no billing history and this is a new setup)
+		# Custom Code
+		if (!(Test-Path variable:HistoryContactList) -or ($CheckChanges -and $TotalChanges -and (($TotalChanges | Select-Object -Last 1)."Billed FT" -ne 0 -or ($TotalChanges | Select-Object -Last 1)."Billed PT" -ne 0))) {
+
+			# No past billing history
+			if (!(Test-Path variable:HistoryContactList) -or !$CheckChanges) {
+				$EmailSubject = "Bill May Need Updating for $OrgFullName - No history found"
+				$EmailIntro = "The User Audit for $OrgFullName was updated but no billing history could be found. Please verify this organization's bill is correct. Next month an email will only be sent if changes were made."
+				$BilledUsersFTTotal = (($Totals | Where-Object { $_.Type -notlike "*Part Time*" }).Billed | Measure-Object -Sum).Sum
+				$BilledUsersPTTotal = (($Totals | Where-Object { $_.Type -like "*Part Time*" }).Billed | Measure-Object -Sum).Sum
+				$EmailTitle = "New Totals"
+				$HTMLBody = '<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								<strong>Full Time Employees:</strong> ' + $BilledUsersFTTotal + '<br />
+								<strong>Part Time Employees:</strong> ' + $BilledUsersPTTotal + '
+							</p>';
+			} else {
+				$EmailSubject = "Bill Needs Updating for $OrgFullName"
+				$EmailIntro = "The User Audit for $OrgFullName was updated and changes were found. Please update this organizations contract."
+				$BilledUsersFTChange = ($TotalChanges | Select-Object -Last 1)."Billed FT"
+				$BilledUsersPTChange = ($TotalChanges | Select-Object -Last 1)."Billed PT"
+				$BilledUsersFTTotal = (($Totals | Where-Object { $_.Type -notlike "*Part Time*" }).Billed | Measure-Object -Sum).Sum
+				$BilledUsersPTTotal = (($Totals | Where-Object { $_.Type -like "*Part Time*" }).Billed | Measure-Object -Sum).Sum
+				$EmailTitle = "Changes"
+				$HTMLBody = '<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								<strong>Full Time Employees Change:</strong> ' + $BilledUsersFTChange.ToString("+#;-#;0") + '<br />
+								<strong>Part Time Employees Change:</strong> ' + $BilledUsersPTChange.ToString("+#;-#;0") + '
+							</p><br />'
+				$HTMLBody += '<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>New Totals</strong></p>'
+				$HTMLBody += '<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								<strong>New Full Time Employees Total:</strong> ' + $BilledUsersFTTotal + '<br />
+								<strong>New Part Time Employees Total:</strong> ' + $BilledUsersPTTotal + '
+							</p>'
+			}							
+
+			$HTMLEmail = $EmailTemplate -f `
+							$EmailIntro, 
+							$EmailTitle, 
+							$HTMLBody, 
+							"Attached is the full user audit for this organization."
+
+			# Get this months user audit report that was generated earlier in this script to attach to the email
+			$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int](Get-Date -Format MM))
+			$Year = Get-Date -Format yyyy
+			$FileName = "$($OrgShortName)--Billed_User_List--$($MonthName)_$Year.xlsx"
+			$Path = $PSScriptRoot + "\$FileName"
+			$ReportEncoded = [System.Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
+
+			# Send email
+			$mailbody = @{
+				"From" = $EmailFrom
+				"To" = $EmailTo_BillingUpdate
+				"Subject" = $EmailSubject
+				"HTMLContent" = $HTMLEmail
+				"Attachments" = @(
+					@{
+						Base64Content = $ReportEncoded
+						Filename = $FileName
+						ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+					}
+				)
+			} | ConvertTo-Json -Depth 6
+
+			$headers = @{
+				'x-api-key' = $Email_APIKey
+			}
+			
+			Invoke-RestMethod -Method Post -Uri $Email_APIEndpoint -Body $mailbody -Headers $headers -ContentType application/json
+			Write-Host "Email Sent" -ForegroundColor Green
+		}
+		
+	} else {
+		Write-Host "Something went wrong when trying to find the $FlexAssetName asset type. Could not update IT Glue." -ForegroundColor Red
+	}
+
+	Write-Host "Billing Update Complete!" -ForegroundColor Black -BackgroundColor Green
+}
+
+Write-Host "Script Completed."
