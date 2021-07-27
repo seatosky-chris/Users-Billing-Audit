@@ -121,7 +121,7 @@ $O365LoginUser = ""
 #
 # Use this in place of the above O365 login for unattended logins using a certificate
 # Recommended for automated billing updates
-# See this guide for setup instructions: https://seatosky.itglue.com/3820429/docs/7544527
+# See this guide for setup instructions: https://github.com/seatosky-chris/Users-Billing-Audit/wiki/Configure-Certificate-for-Unattended-Powershell-Access
 #
 # AppID is the ID of the Azure app setup above
 # TenantID can be found using Get-AzureADTenantDetail  (see ObjectId property, auth with Connect-AzureAD first)
