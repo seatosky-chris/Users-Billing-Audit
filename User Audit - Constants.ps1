@@ -39,7 +39,7 @@ $APIKEy =  ""
 # The ITGlue endpoint URL. If using an organization specific APIKey, this should be the URL for the AZGlueForwarder. 
 # The default URL here should be correct, you just need to add the code.
 #
-# Example: "https://itgapiforwarder.azurewebsites.net/api/AzGlueForwarder?code=DM5utp67MRnkNjbSwow3DGC6h4bPOCp1x==&ResourceURI="
+# Example: "https://itgforwarder.azurewebsites.net/api/AzGlueForwarder?code=DM5utp67MRnkNjbSwow3DGC6h4bPOCp1x==&ResourceURI="
 #
 $APIEndpoint = ""
 
@@ -59,7 +59,7 @@ $Email_APIKey =  ""
 # The Email forwarder endpoint url.
 # The default URL here should be correct, you just need to add the code.
 #
-# Example: "https://automationmailer.azurewebsites.net/api/MailForwarder?ResourceURI="
+# Example: "https://automail.azurewebsites.net/api/MailForwarder?ResourceURI="
 #
 $Email_APIEndpoint = ""
 
@@ -131,7 +131,7 @@ $O365LoginUser = ""
 # Example: @{
 #    "AppID" = "9220-9add-48d9-9c59-0e0b3"
 #    "TenantID" = "b4e5-6420-4a9c-b20b-7a1b54"
-#    "Organization" = "seatosky.onmicrosoft.com"
+#    "Organization" = "sts.onmicrosoft.com"
 #    "CertificateThumprint" = "1DB7ACA9E26A62D8594FE"
 #  }
 #
@@ -160,7 +160,7 @@ $ExchangeServerFQDN = ""
 # Based on the $ADIncludeSubFolders variable, these folders can either include or disclude nested folders.
 # This is an array and you can include multiple folders, separate each by a comma.
 #
-# Example: "SBSUsers"
+# Example: "Users"
 #
 $ADUserFolders = @(
 	"Users"
@@ -201,12 +201,12 @@ $InactivityO365Preference = $false
 # Set the email address and name you want to send user audit emails from
 #
 # Example: @{
-#   Email = 'user_audit@app.sts.com'
+#   Email = 'user.audit@sts.com'
 #   Name = "User Audit"
 # }
 #
 $EmailFrom = @{
-  Email = 'user_audit@app.sts.com'
+  Email = 'user.audit@sts.com'
   Name = "User Audit"
 }
 
