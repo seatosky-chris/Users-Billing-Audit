@@ -1,4 +1,4 @@
-param($RunAfter = $null)
+param($RunAfter = $null, $UserAudit = $false, $BillingUpdate = $false)
 
 if ($RunAfter -eq "User_Audit") {
     $RunAfter = "User Audit"
@@ -104,6 +104,11 @@ Write-Output "[*] Done!"
 
 if ($RunAfter) {
 	Write-Output "[*] Restarting the $RunAfter script."
-    Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-File', "$($PSScriptRoot)\$RunAfter.ps1" -Verb runAs
+    $Path = "$($PSScriptRoot)\$RunAfter.ps1"
+    if ($RunAfter -eq "User Audit") {
+        Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList "-file `"$($Path)`""
+    } else {
+        Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList "-file `"$($Path)`" -UserAudit $UserAudit -BillingUpdate $BillingUpdate"
+    }
 }
 exit
