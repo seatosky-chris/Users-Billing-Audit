@@ -196,6 +196,13 @@ $EmailOnlyGroupsIgnore = @(
 $InactivityO365Preference = $false 
 
 ####################
+# $TotalsByLocation
+# 
+# When exporting a billing report, if $true, a section will be included with the total amount of billed and unbilled users per-location.
+#
+$TotalsByLocation = $false 
+
+####################
 # $EmailFrom
 #
 # Set the email address and name you want to send user audit emails from

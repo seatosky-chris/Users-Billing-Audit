@@ -3049,6 +3049,43 @@ if ($ExportChoice -eq 'Yes') {
 	$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
 	Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
 
+	# totals by location table
+	if ($TotalsByLocation -and $HasMultipleLocations) {
+		$TotalsByLoc = @()
+
+		foreach ($Location in $Locations) {
+			$BilledCount = ($billedCsvTable | Where-Object { $_.Location -eq $Location.name } | Measure-Object).Count
+			$UnbilledCount = ($unbilledCsvTable | Where-Object { $_.Location -eq $Location.name } | Measure-Object).Count
+			if (!$BilledCount -and !$UnbilledCount) { continue; }
+			$TotalsByLoc += [PSCustomObject]@{
+				Location = $Location.name
+				Billed = $BilledCount
+				Unbilled = $UnbilledCount
+			}
+		}
+		$NoLocBilledCount = ($billedCsvTable | Where-Object { !$_.Location } | Measure-Object).Count
+		$NoLocUnbilledCount = ($unbilledCsvTable | Where-Object { !$_.Location } | Measure-Object).Count
+		if ($NoLocBilledCount -or $NoLocUnbilledCount) {
+			$TotalsByLoc += [PSCustomObject]@{
+				Type = "Unknown"
+				Billed = $NoLocBilledCount
+				Unbilled = $NoLocUnbilledCount
+			}
+		}
+
+		$totalsByLocFirstRow = $totalsTblLastRow + 4
+		$xlParams = @{WorkSheet=$ws; Bold=$true; BorderColor=[System.Drawing.ColorTranslator]::FromHtml("#548235"); BorderBottom="Thick"; FontColor=[System.Drawing.ColorTranslator]::FromHtml("#375623"); FontSize=15; HorizontalAlignment="Center"; Merge=$true}
+		Set-ExcelRange -Range "A$($totalsByLocFirstRow):C$($totalsByLocFirstRow)" -Value "Totals by Location" @xlParams
+		$totalsByLocFirstRow += 1
+
+		$totalsTblLastRow = $totalsByLocFirstRow + ($TotalsByLoc | Measure-Object).Count
+		$excel = $TotalsByLoc | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $totalsByLocFirstRow
+		Add-ExcelTable -PassThru -Range $ws.Cells["A$($totalsByLocFirstRow):C$($totalsTblLastRow)"] -TableName TotalsByLoc -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
+		$totalsTblLastRow += 1
+		$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
+		Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
+	}
+
 	if ($CheckChanges) {
 		# total changes title
 		$ChangesTitle = "Changes (" + $TotalChanges[0].Month + " to " + $TotalChanges[1].Month + ")"
@@ -3271,6 +3308,33 @@ if ($ExportChoice -eq 'Yes') {
 		$UserBreakdownTable += "
 				</tbody>
 			</table>"
+
+		if ($TotalsByLocation) {
+			$UserBreakdownTable += "
+			<br />
+			<h2>Totals by Location</h2>
+			<table>
+				<thead>
+					<tr>
+					<th>Location</th>
+					<th>Billed</th>
+					<th>Unbilled</th>
+					</tr>
+				</thead>
+				<tbody>"
+
+			$TotalsByLoc | Foreach-Object {
+				$UserBreakdownTable += "
+					<tr>
+						<th>$($_.Location)</th>
+						<td>$($_.Billed)</td>
+						<td>$($_.Unbilled)</td>
+					</tr>"
+			}
+			$UserBreakdownTable += "
+				</tbody>
+			</table>"
+		}
 
 		$ReportEncoded = [System.Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
 
