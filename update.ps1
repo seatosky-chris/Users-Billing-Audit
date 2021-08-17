@@ -108,7 +108,13 @@ if ($RunAfter) {
     if ($RunAfter -eq "User Audit") {
         Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList "-file `"$($Path)`""
     } else {
-        Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList "-file `"$($Path)`" -UserAudit $UserAudit -BillingUpdate $BillingUpdate"
+        $Arguments = ""
+        if ($UserAudit) {
+            $Arguments = "-UserAudit"
+        } elseif ($BillingUpdate) {
+            $Arguments = "-BillingUpdate"
+        }
+        Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList "-file `"$($Path)`" $Arguments"
     }
 }
 exit
