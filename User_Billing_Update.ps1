@@ -11,6 +11,7 @@ $CustomOverview_FlexAssetID = 219027
 $GitHubVersion = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/currentversion.txt"
 #####################################################################
 Write-Host "User audit starting..."
+Write-Host "Auto Update worked!"
 
 # Ensure they are using the latest TLS version
 $CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
