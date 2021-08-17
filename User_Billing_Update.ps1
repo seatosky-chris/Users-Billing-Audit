@@ -9,9 +9,9 @@ Set-ExecutionPolicy Unrestricted
 . "$PSScriptRoot\O365Licenses.ps1"
 $CustomOverview_FlexAssetID = 219027
 $GitHubVersion = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/currentversion.txt"
+$UpdateFile = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/update.ps1"
 #####################################################################
 Write-Host "User audit starting..."
-Write-Host "Auto Update worked!"
 
 # Ensure they are using the latest TLS version
 $CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
@@ -31,7 +31,7 @@ try {
 }
 
 if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
-	#An update is most likely available, but make sure
+	# An update is most likely available, but make sure
 	$curr = $CurrentVersion.Split('.')
 	$next = $NextVersion.Split('.')
 	for($i=0; $i -le ($curr.Count -1); $i++)
@@ -51,7 +51,7 @@ if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
 
 		$UpdatePath = "$PSScriptRoot\update.ps1"
 		(New-Object System.Net.Webclient).DownloadFile($UpdateFile, $UpdatePath)
-		. $UpdatePath -RunAfter "User_Billing_Update"
+		Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-File', $UpdatePath, "User_Billing_Update"
 		exit
 	}
 }
