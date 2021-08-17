@@ -8,6 +8,7 @@ Set-ExecutionPolicy Unrestricted
 . "$PSScriptRoot\User Audit - Constants.ps1"
 . "$PSScriptRoot\O365Licenses.ps1"
 $CustomOverview_FlexAssetID = 219027
+$GitHubVersion = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/currentversion.txt"
 #####################################################################
 Write-Host "User audit starting..."
 
@@ -17,6 +18,43 @@ if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
 }
+
+# Check for any required updates
+$UpdatesAvailable = $false
+$CurrentVersion = Get-Content "$PSScriptRoot\currentversion.txt"
+$NextVersion = $null
+try {
+	$NextVersion = (New-Object System.Net.WebClient).DownloadString($GitHubVersion).Trim([Environment]::NewLine)
+} catch [System.Exception] {
+	Write-Host $_ -ForegroundColor Red
+}
+
+if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
+	#An update is most likely available, but make sure
+	$curr = $CurrentVersion.Split('.')
+	$next = $NextVersion.Split('.')
+	for($i=0; $i -le ($curr.Count -1); $i++)
+	{
+		if ([int]$next[$i] -gt [int]$curr[$i])
+		{
+			$UpdatesAvailable = $true
+			break
+		}
+	}
+
+	if ($UpdatesAvailable) {
+		Write-Host "Updates Found!" -ForegroundColor Yellow
+		Write-Host "CURRENT VERSION: $CurrentVersion" -ForegroundColor Yellow
+		Write-Host "NEXT VERSION: $NextVersion" -ForegroundColor Yellow
+		Write-Host "Updating script..." -ForegroundColor Yellow
+
+		$UpdatePath = "$PSScriptRoot\update.ps1"
+		(New-Object System.Net.Webclient).DownloadFile($UpdateFile, $UpdatePath)
+		. $UpdatePath -RunAfter "User_Billing_Update"
+		exit
+	}
+}
+### Update check complete
 
 Import-module ITGlueAPI
 Add-ITGlueBaseURI -base_uri $APIEndpoint
