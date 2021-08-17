@@ -1800,7 +1800,7 @@ if ($BillingUpdate) {
 						destination_type = "Flexible Asset"
 					}
 				}
-				New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems
+				New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
 			}
 
 			# and email Office 365 page too if it exists
@@ -1815,10 +1815,10 @@ if ($BillingUpdate) {
 						destination_type = "Flexible Asset"
 					}
 				}
-				New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems
+				New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
 			}
 		} else {
-			Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody
+			Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
 			Write-Host "Updated the O365 License Overview."
 		}
 
