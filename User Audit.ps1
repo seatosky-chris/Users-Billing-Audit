@@ -28,6 +28,16 @@ try {
 	Write-Host $_ -ForegroundColor Red
 }
 
+function FixFilePermissions($Path) {
+	$CurUser = ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+	$CurUserAccount = New-Object System.Security.Principal.Ntaccount($CurUser)
+	$acl = Get-Acl -Path $Path
+	$accessrule = New-Object System.Security.AccessControl.FileSystemAccessRule($CurUser, 'FullControl', 'Allow')
+	$acl.SetOwner($CurUserAccount)
+	$acl.SetAccessRule($accessrule)
+	Set-Acl -Path $Path -AclObject $acl
+}
+
 if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
 	# An update is most likely available, but make sure
 	$curr = $CurrentVersion.Split('.')
@@ -49,6 +59,7 @@ if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
 
 		$UpdatePath = "$PSScriptRoot\update.ps1"
 		(New-Object System.Net.Webclient).DownloadFile($UpdateFile, $UpdatePath)
+		FixFilePermissions -Path $UpdatePath
 		Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-File', $UpdatePath, "User_Audit"
 		exit
 	}
