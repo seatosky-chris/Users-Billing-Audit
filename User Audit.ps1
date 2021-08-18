@@ -3480,7 +3480,7 @@ if ($ExportChoice -eq 'Yes') {
 			$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $CustomOverview_FlexAssetID -filter_organization_id $orgID -include attachments
 			$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
 
-			if (!$ExistingLicenseOverview) {
+			if (!$ExistingLicenseOverview.data) {
 				$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
 				$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
 				$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
