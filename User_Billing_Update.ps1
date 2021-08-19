@@ -396,12 +396,6 @@ if ($UserAudit) {
 			}
 		}
 
-		if ($EmailType -eq "O365") {
-			Disconnect-ExchangeOnline -Confirm:$false
-		} elseif ($ExchangeServerFQDN) {
-			Remove-PSSession $Session
-		}
-
 		$MailboxCount = ($O365Mailboxes | Measure-Object).Count
 		Write-Host "Got all $MailboxCount mailboxes. Now comparing them with IT Glue accounts."
 
@@ -1928,6 +1922,13 @@ if ($BillingUpdate) {
 			Write-Host "O365 license overview xls uploaded and attached." -ForegroundColor Green
 		}
 	}
+}
+
+# Close email sessions
+if ($EmailType -eq "O365") {
+	Disconnect-ExchangeOnline -Confirm:$false
+} elseif ($ExchangeServerFQDN) {
+	Remove-PSSession $Session
 }
 
 Write-Host "Script Completed."
