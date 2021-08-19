@@ -62,7 +62,7 @@ if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
 		$UpdatePath = "$PSScriptRoot\update.ps1"
 		(New-Object System.Net.Webclient).DownloadFile($UpdateFile, $UpdatePath)
 		FixFilePermissions -Path $UpdatePath
-		Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-File', $UpdatePath, "User_Billing_Update"
+		Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-File', $UpdatePath, "User_Billing_Update", $UserAudit, $BillingUpdate -NoNewWindow
 		exit
 	}
 }
