@@ -1849,7 +1849,7 @@ if ($BillingUpdate) {
 		$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $CustomOverview_FlexAssetID -filter_organization_id $orgID -include attachments
 		$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
 
-		if (!$ExistingLicenseOverview) {
+		if (!$ExistingLicenseOverview.data) {
 			$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
 			$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
 			$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
@@ -1890,7 +1890,7 @@ if ($BillingUpdate) {
 		$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int](Get-Date -Format MM))
 		$Year = Get-Date -Format yyyy
 		$FileName = "$($OrgShortName)--O365_License_Overview--$($MonthName)_$Year.xlsx"
-		New-Item -ItemType Directory -Force -Path ($PSScriptRoot + "\O365LicenseOverview")
+		New-Item -ItemType Directory -Force -Path ($PSScriptRoot + "\O365LicenseOverview") | Out-Null
 		$Path = $PSScriptRoot + "\O365LicenseOverview\$FileName"
 		Remove-Item $Path -ErrorAction SilentlyContinue
 
