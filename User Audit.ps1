@@ -86,6 +86,7 @@ $Version = (Get-Module ITGlueAPI).Version
 if ($Version.Major -lt 2 -or $Version.Minor -lt 1) {
 	Remove-Module ITGlueAPI
 	Uninstall-Module ITGlueAPI
+	Remove-Item -LiteralPath "C:\Program Files\WindowsPowerShell\Modules\ITGlueAPI" -Force -Recurse -ErrorAction Ignore
 	Install-Module -Name ITGlueAPI
 	Import-Module ITGlueAPI -Force
 }
