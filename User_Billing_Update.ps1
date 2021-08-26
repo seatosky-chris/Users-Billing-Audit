@@ -839,7 +839,7 @@ if ($UserAudit) {
 					# ToEnabled
 					$WarnObj.type = "ToEnabled"
 					$WarnObj.reason = "$EmailType Account Enabled. IT Glue Contact should not be 'Terminated'."
-				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -ne 'Terminated' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
+				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
 					# ToSharedMailbox
 					$WarnObj.type = "ToSharedMailbox"
 					$WarnObj.reason = "$EmailType account appears to be a shared mailbox. Consider changing the IT Glue Contact type to 'Internal / Shared Mailbox'."
