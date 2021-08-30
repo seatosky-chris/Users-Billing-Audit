@@ -1600,7 +1600,7 @@ if ($BillingUpdate) {
 			</tbody>
 		</table>"
 
-	if ($TotalsByLocation) {
+	if ($TotalsByLocation -and $HasMultipleLocations) {
 		$UserBreakdownTable += "
 		<br />
 		<h2>Totals by Location</h2>
@@ -1617,7 +1617,7 @@ if ($BillingUpdate) {
 		$TotalsByLoc | Foreach-Object {
 			$UserBreakdownTable += "
 				<tr>
-					<th>$($_.Location)</th>
+					<td>$($_.Location)</td>
 					<td>$($_.Billed)</td>
 					<td>$($_.Unbilled)</td>
 				</tr>"
@@ -1739,7 +1739,18 @@ if ($BillingUpdate) {
 								<strong>New Full Time Employees Total:</strong> ' + $BilledUsersFTTotal + '<br />
 								<strong>New Part Time Employees Total:</strong> ' + $BilledUsersPTTotal + '
 							</p>'
-			}							
+			}
+			
+			if ($TotalsByLocation -and $HasMultipleLocations) {
+				$HTMLBody += "<br />"
+				$HTMLBody += '<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>Totals by Location</strong></p>'
+				$HTMLBody += '<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">'
+		
+				$TotalsByLoc | Foreach-Object {
+					$HTMLBody += "<strong>$($_.Location):</strong> $($_.Billed) <br />"
+				}
+				$HTMLBody += "</p>"
+			}
 
 			$HTMLEmail = $EmailTemplate -f `
 							$EmailIntro, 
