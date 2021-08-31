@@ -147,7 +147,7 @@ if ($CheckEmail) {
 			Write-Host "Connecting to exchange server..."
 			$Credential = Get-StoredCredential -Target 'ExchangeServer'
 			if (!$Credential) {
-				New-StoredCredential -Comment 'Exchange Server Login (for User Audit)' -Credentials $(Get-Credential -Message "Enter the exchange server login details:") -Target 'ExchangeServer' | Out-Null
+				New-StoredCredential -Comment 'Exchange Server Login (for User Audit)' -Persist LOCALMACHINE -Credentials $(Get-Credential -Message "Enter the exchange server login details:") -Target 'ExchangeServer' | Out-Null
 				$Credential = Get-StoredCredential -Target 'ExchangeServer'
 				Write-Host "Password stored for next time!" -ForegroundColor Green
 			}

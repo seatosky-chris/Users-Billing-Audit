@@ -82,6 +82,7 @@ if ($CheckEmail -and $EmailType -eq "O365" -and $O365UnattendedLogin -and $O365U
 	Connect-ExchangeOnline -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -AppID $O365UnattendedLogin.AppID -Organization $O365UnattendedLogin.Organization -ShowProgress $true -ShowBanner:$false
 	Write-Host "Successfully imported email related modules."
 } elseif ($CheckEmail -and $EmailType -eq "Exchange") {
+	Import-Module CredentialManager
 	$Credential = Get-StoredCredential -Target 'ExchangeServer'
 	$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServerFQDN/PowerShell/" -Authentication Kerberos -Credential $Credential
 	Import-PSSession $Session -DisableNameChecking
