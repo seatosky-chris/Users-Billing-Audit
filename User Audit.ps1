@@ -2775,11 +2775,125 @@ if ($ExportChoice -eq 'Yes') {
 	# TODO: Upload to ITG
 }
 
-$O365AuditChoice = $false
-$O365AuditChoice = [System.Windows.MessageBox]::Show('Would you like to run an audit of Office 365 licenses?', 'Audit Office 365 Licenses', 'YesNo')
+if ($EmailType -eq "O365") {
+	$O365AuditChoice = $false
+	$O365AuditChoice = [System.Windows.MessageBox]::Show('Would you like to run an audit of Office 365 licenses?', 'Audit Office 365 Licenses', 'YesNo')
 
-if ($O365AuditChoice -eq 'Yes') {
-	Write-Host "This option is not available yet. Skipping." -ForegroundColor Red
+	if ($O365AuditChoice -eq 'Yes') {
+		if (!$LicensePlanList) {
+			$LicensePlanList = Get-AzureADSubscribedSku
+		}
+		
+		# If $O365StandardLicenses is set, then this is configured and we'll do the audit
+		if ($O365StandardLicenses) {
+			# expand special types in $O365StandardLicenses
+			$SpecialTypes = @{
+				'EmployeeContactTypes' = $EmployeeContactTypes
+				'BilledContactTypes' = $BilledContactTypes
+				'UnbilledContactTypes' = $UnbilledContactTypes
+				'ConvertToEmployeeTypes' = $ConvertToEmployeeTypes
+			}
+			
+			foreach ($LicenseStandards in $O365StandardLicenses) {
+				foreach ($Type in $SpecialTypes.GetEnumerator()) {
+					if ($LicenseStandards.Types -contains $Type.Name) {
+						$LicenseStandards.Types += $Type.Value
+						$LicenseStandards.Types = $LicenseStandards.Types | Where-Object { $_ -ne $Type.Name }
+					}
+				}
+			}
+
+			# Find unused licenses
+			$UnusedLicenses = @()
+			foreach ($License in $LicensePlanList) {
+				if ($License.ConsumedUnits -lt $License.PrepaidUnits.Enabled -and $License.SkuPartNumber -notlike "*FREE*") {
+					$UnusedLicenses += [pscustomobject]@{
+						License = $O365LicenseTypes[$License.SkuPartNumber]
+						Amount = ($License.PrepaidUnits.Enabled - $License.ConsumedUnits)
+					}
+				}
+			}
+
+			# Go through each user and verify they have the correct license based on their type
+			$BadLicenses = @()
+			foreach ($Match in $FullMatches) {
+				if (!$Match.'O365-Connected?' -or $Match.'O365-PrimarySmtp' -eq 'no license') {
+					continue;
+				}
+				$O365Mailbox = $O365Mailboxes | Where-Object { $_.PrimarySmtpAddress -eq $Match.'O365-PrimarySmtp' } | Select-Object -First 1
+
+				if (!$O365Mailbox.AssignedLicenses) { 
+					continue;
+				}
+
+				$AllowedLicenses = ($O365StandardLicenses | Where-Object { $_.Types -like $Match.Type }).Licenses
+				foreach ($AssignedLicense in $O365Mailbox.AssignedLicenses) {
+					# only check primary licenses
+					if ($AssignedLicense -in $O365LicenseTypes_Primary.keys -and $AllowedLicenses) {
+						if ($AssignedLicense -notin $AllowedLicenses -or $AllowedLicenses -contains "None") {
+							$BadLicenses += [pscustomobject]@{
+								"O365 Name" = $Match."O365-Name"
+								"ITG Type" = $Match.Type
+								Email = $Match."O365-PrimarySmtp"
+								License = "$($O365LicenseTypes[$AssignedLicense]) ($AssignedLicense)"
+								"Preferred License" = (($AllowedLicenses | Foreach-Object { $O365LicenseTypes[$_] })  -join " / ")
+							}
+						}
+					}
+				}
+			}
+
+			if ($UnusedLicenses) {
+				[System.Windows.MessageBox]::Show('Unassigned O365 licenses were found. Please review.')
+				$UnusedLicenses | Out-GridView -PassThru -Title "Unused O365 Licenses"
+			}
+
+			if ($BadLicenses) {
+				[System.Windows.MessageBox]::Show("Improperly assigned O365 licenses were found. These are license types that don't match that employee's type. For example, a full copy of office for an email-only user. Please review and fix where necessary.")
+				$BadLicenses | Sort-Object -Property "ITG Type", License, "O365 Name" | Out-GridView -PassThru -Title "Improperly Assigned O365 Licenses"
+			}
+
+		# If $O365StandardLicenses is not set, then this is not configured. Lets suggest values for $O365StandardLicenses
+		} else {
+			$LicenseSuggestions = @{"BilledContactTypes" = @(); Terminated = @("None")}
+			foreach ($Match in $FullMatches) {
+				if (!$Match.'O365-Connected?' -or $Match.'O365-PrimarySmtp' -eq 'no license') {
+					continue;
+				}
+				$O365Mailbox = $O365Mailboxes | Where-Object { $_.PrimarySmtpAddress -eq $Match.'O365-PrimarySmtp' } | Select-Object -First 1
+				$PrimaryLicenses = $O365Mailbox.AssignedLicenses | Where-Object { $_ -in $O365LicenseTypes_Primary.Keys }
+
+				foreach ($PrimaryLicense in $PrimaryLicenses) {
+					if ($Match.Type -in $BilledContactTypes) {
+						if ($PrimaryLicense -notin $LicenseSuggestions.BilledContactTypes) {
+							$LicenseSuggestions.BilledContactTypes += $PrimaryLicense
+						}
+					} elseif ($Match.Type -ne "Terminated") {
+						if ($Match.Type -notin $LicenseSuggestions.Keys) {
+							$LicenseSuggestions[$Match.Type] = @()
+						}
+						if ($PrimaryLicense -notin $LicenseSuggestions[$Match.Type]) {
+							$LicenseSuggestions[$Match.Type] += $PrimaryLicense
+						}
+					}
+				}
+			}
+
+			$LicenseSuggestionsDisplay = @()
+			foreach ($LicenseSuggestion in $LicenseSuggestions.GetEnumerator()) {
+				$LicenseSuggestionsDisplay += [pscustomobject]@{
+					Type = $LicenseSuggestion.Name
+					Codes = $LicenseSuggestion.Value
+					"License Names" = ($LicenseSuggestion.Value | ForEach-Object { $O365LicenseTypes[$_] })
+				}
+			}
+
+			$LicenseSuggestionsDisplay | Out-GridView -PassThru -Title "Current O365 license per type"
+			$LicenseSuggestionsDisplay | ForEach-Object {
+				Write-Host ($_ | Select-Object Type, @{Name="Codes"; E={('@("' + ($_.Codes -join '", "') + '")')}}) -ForegroundColor Green
+			}
+		}
+	}
 }
 
 $ExportChoice = $false

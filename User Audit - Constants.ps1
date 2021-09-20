@@ -257,6 +257,48 @@ $EmailTo_BillingUpdate = @(
   }
 )
 
+####################
+# $O365StandardLicenses
+#
+# Map ITG types to the O365 license types that generally should be used for that type
+# For the O365 license audit
+# This should be an array of hashtables where each hashtable is a set of mappings
+# Within the hashtable should be 2 arrays, 1 under the index Types, the 2nd under the index Licenses
+# For 'Types', use any ITG types or the 4 special types: "EmployeeContactTypes", "BilledContactTypes", "UnbilledContactTypes" & "ConvertToEmployeeTypes" (correspond to the below contact type mappings)
+# For 'Licenses', use any O365 SkuPartNumber (see the keys in O365Licenses.ps1), or 'None' which will allow no licenses for that type
+# Types will be matched to as many groups as they exist in and will be allowed any license in one of those groups, the exception being "None"
+# Anything in the $O365LicenseTypes_Primary array will be checked and considered wrong if not allowed here, anything in the secondary list will be allowed regardless
+#
+# Example: @(
+#   @{
+#       Types = @("BilledContactTypes", "Internal IT")
+#       Licenses = @("SPE_E5", "SPE_E3", "SPB", "O365_BUSINESS_PREMIUM", "SMB_BUSINESS_PREMIUM")
+#    },
+#    @{
+#       Types = @("Employee - Email Only", "Contractor")
+#       Licenses = @("O365_BUSINESS_ESSENTIALS", "SMB_BUSINESS_ESSENTIALS", "STANDARDPACK", "EXCHANGESTANDARD", "EXCHANGEENTERPRISE", "EXCHANGEESSENTIALS")
+#    },
+#    @{
+#      Types = @("Terminated")
+#      Licenses = @("None")
+#    }
+# )
+#
+$O365StandardLicenses = @(
+   @{
+       Types = @("BilledContactTypes", "Internal IT")
+       Licenses = @("SPE_E5", "SPE_E3", "SPB", "O365_BUSINESS_PREMIUM", "SMB_BUSINESS_PREMIUM")
+    },
+    @{
+       Types = @("Employee - Email Only", "Contractor")
+       Licenses = @("O365_BUSINESS_ESSENTIALS", "SMB_BUSINESS_ESSENTIALS", "STANDARDPACK", "EXCHANGESTANDARD", "EXCHANGEENTERPRISE", "EXCHANGEESSENTIALS", "EXCHANGEDESKLESS")
+    },
+    @{
+      Types = @("Terminated")
+      Licenses = @("None")
+    }
+)
+
 
 ##############################################################################################
 ##################################  Contact Type Mappings  ###################################

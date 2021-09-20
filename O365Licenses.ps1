@@ -6,15 +6,16 @@
 ##############################################################################################
 
 ####################
-# $O365LicenseTypes
+# $O365LicenseTypes_Primary
 # 
 # A list of 'primary' office 365 license types mapped to their license name
-# These are email licenses primarily (or OneDrive/SharePoint if not email), 
-#  you can add other App types though if you'd rather see those licenses
+# These should be email licenses primarily (or OneDrive/SharePoint if not email), 
+#  you can add other App types to the secondary array below
+# A user should generally not have more than 1 license in this list
 # The script looks through a users license and grabs the first one it sees that is in this list
 # The licenses are in order of preference, from top to bottom
 #
-$O365LicenseTypes = [ordered]@{
+$O365LicenseTypes_Primary = [ordered]@{
 	SPE_E5 = "Microsoft 365 E5"
 	SPE_E3 = "Microsoft 365 E3"
 	SPB = "Microsoft 365 Business Premium"
@@ -45,7 +46,16 @@ $O365LicenseTypes = [ordered]@{
 	WACONEDRIVEENTERPRISE = "OneDrive for Business (Plan 2)"
 	SHAREPOINTSTANDARD = "SharePoint Online (Plan 1)"
 	SHAREPOINTENTERPRISE = "SharePoint Online (Plan 2)"
-	WIN10_PRO_ENT_SUB = "Windows 10 Enterprise E3"
+}
+
+####################
+# $O365LicenseTypes_Secondary
+# 
+# A list of 'secondary' office 365 license types mapped to their license name
+# These are any other licenses that could be used in tandem with 1 of the Primary licenses (e.g. Project/Visio)
+#
+$O365LicenseTypes_Secondary = [ordered]@{
+  WIN10_PRO_ENT_SUB = "Windows 10 Enterprise E3"
 	WIN10_VDA_E5 = "Windows 10 Enterprise E5"
   ATP_ENTERPRISE = "Exchange Online Advanced Threat Protection"
   EMS = "Enterprise Mobility Suite"
@@ -57,7 +67,7 @@ $O365LicenseTypes = [ordered]@{
   POWERAPPS_VIRAL = "Microsoft Power Apps & Flow"
   SMB_APPS = "Microsoft Business Apps"
   DYN365_FINANCIALS_TEAM_MEMBERS_SKU = 'Dynamics 365 for Team Members Business Edition'
-
+  
   SWAY = 'SWAY'
   NBPOSTS = 'Social Engagement Additional 10K Posts'
   PROJECT_MADEIRA_PREVIEW_IW_SKU = 'Dynamics 365 for Financials for IWs'
@@ -211,3 +221,6 @@ $O365LicenseTypes = [ordered]@{
   WACSHAREPOINTSTD = 'Office Web Apps with SharePoint (Plan 1)'
   STANDARDWOFFPACK_FACULTY = 'Office 365 Education E1 for Faculty'
 }
+
+# All licenses combined
+$O365LicenseTypes = $O365LicenseTypes_Primary + $O365LicenseTypes_Secondary
