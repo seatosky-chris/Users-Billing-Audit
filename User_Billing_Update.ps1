@@ -13,19 +13,18 @@ $UpdateFile = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Au
 #####################################################################
 Write-Host "User audit starting..."
 
-# Setup logging
-If (Get-Module -ListAvailable -Name "PSFramework") {Import-module PSFramework} Else { install-module PSFramework -Force; import-module PSFramework}
-$logFile = Join-Path -path "$PSScriptRoot\ErrorLogs" -ChildPath "log-$(Get-date -f 'yyyyMMddHHmmss').txt";
-Set-PSFLoggingProvider -Name logfile -FilePath $logFile -Enabled $true;
-Write-PSFMessage -Level Verbose -Message "Starting audit."
-
 # Ensure they are using the latest TLS version
 $CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
 if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
-	Write-PSFMessage -Level Warning -Message "Temporarily changed TLS to TLS v1.2."
 }
+
+# Setup logging
+If (Get-Module -ListAvailable -Name "PSFramework") {Import-module PSFramework} Else { install-module PSFramework -Force; import-module PSFramework}
+$logFile = Join-Path -path "$PSScriptRoot\ErrorLogs" -ChildPath "log-$(Get-date -f 'yyyyMMddHHmmss').txt";
+Set-PSFLoggingProvider -Name logfile -FilePath $logFile -Enabled $true;
+Write-PSFMessage -Level Verbose -Message "Starting audit."
 
 # Check for any required updates
 $UpdatesAvailable = $false
