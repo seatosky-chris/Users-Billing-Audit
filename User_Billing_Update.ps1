@@ -13,21 +13,31 @@ $UpdateFile = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Au
 #####################################################################
 Write-Host "User audit starting..."
 
+# Setup logging
+If (Get-Module -ListAvailable -Name "PSFramework") {Import-module PSFramework} Else { install-module PSFramework -Force; import-module PSFramework}
+$logFile = Join-Path -path "$PSScriptRoot\ErrorLogs" -ChildPath "log-$(Get-date -f 'yyyyMMddHHmmss').txt";
+Set-PSFLoggingProvider -Name logfile -FilePath $logFile -Enabled $true;
+Write-PSFMessage -Level Verbose -Message "Starting audit."
+
 # Ensure they are using the latest TLS version
 $CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
 if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
+	Write-PSFMessage -Level Warning -Message "Temporarily changed TLS to TLS v1.2."
 }
 
 # Check for any required updates
 $UpdatesAvailable = $false
 $CurrentVersion = Get-Content "$PSScriptRoot\currentversion.txt"
+Write-PSFMessage -Level Verbose -Message "Current Version: $CurrentVersion"
 $NextVersion = $null
 try {
 	$NextVersion = (New-Object System.Net.WebClient).DownloadString($GitHubVersion).Trim([Environment]::NewLine)
+	Write-PSFMessage -Level Verbose -Message "Next Version: $NextVersion"
 } catch [System.Exception] {
 	Write-Host $_ -ForegroundColor Red
+	Write-PSFMessage -Level Warning -Message "Failed to get 'next version' from repo."
 }
 
 function FixFilePermissions($Path) {
@@ -58,11 +68,13 @@ if ($NextVersion -ne $null -and $CurrentVersion -ne $NextVersion) {
 		Write-Host "CURRENT VERSION: $CurrentVersion" -ForegroundColor Yellow
 		Write-Host "NEXT VERSION: $NextVersion" -ForegroundColor Yellow
 		Write-Host "Updating script..." -ForegroundColor Yellow
+		Write-PSFMessage -Level Verbose -Message "Update required."
 
 		$UpdatePath = "$PSScriptRoot\update.ps1"
 		(New-Object System.Net.Webclient).DownloadFile($UpdateFile, $UpdatePath)
 		FixFilePermissions -Path $UpdatePath
 		Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-File', $UpdatePath, "User_Billing_Update", $UserAudit, $BillingUpdate -NoNewWindow
+		Write-PSFMessage -Level Verbose -Message "Update complete. Restart."
 		exit
 	}
 }
@@ -73,6 +85,7 @@ Add-ITGlueBaseURI -base_uri $APIEndpoint
 Add-ITGlueAPIKey $APIKEy
 
 Write-Host "Successfully imported required modules and configured the ITGlue API."
+Write-PSFMessage -Level Verbose -Message "Configured ITGlue module."
 
 if ($CheckEmail -and $EmailType -eq "O365" -and $O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
 	# Connect to the mail service (it works better doing this first thing)
@@ -81,11 +94,13 @@ if ($CheckEmail -and $EmailType -eq "O365" -and $O365UnattendedLogin -and $O365U
 	Connect-AzureAD -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -ApplicationId $O365UnattendedLogin.AppID -TenantId $O365UnattendedLogin.TenantId
 	Connect-ExchangeOnline -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -AppID $O365UnattendedLogin.AppID -Organization $O365UnattendedLogin.Organization -ShowProgress $true -ShowBanner:$false
 	Write-Host "Successfully imported email related modules."
+	Write-PSFMessage -Level Verbose -Message "Imported email related modules."
 } elseif ($CheckEmail -and $EmailType -eq "Exchange") {
 	Import-Module CredentialManager
 	$Credential = Get-StoredCredential -Target 'ExchangeServer'
 	$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServerFQDN/PowerShell/" -Authentication Kerberos -Credential $Credential
 	Import-PSSession $Session -DisableNameChecking
+	Write-PSFMessage -Level Verbose -Message "Connected to Exchange Server session."
 }
 
 ###################################################
@@ -100,6 +115,7 @@ if ($FullContactList.Error) {
 	Write-Host "An error occured when trying to use the IT Glue API!" -ForegroundColor Red
 	Write-Host "Error: $($FullContactList.Error)" -ForegroundColor Red
 	Write-Host "Please fix the issue then try again."
+	Write-PSFMessage -Level Error -Message "Could not get contact list from ITG. Error: $($FullContactList.Error)"
 	Read-Host "Press ENTER to close..." 
 	exit
 } else {
@@ -108,6 +124,7 @@ if ($FullContactList.Error) {
 
 $ContactCount = ($FullContactList | Measure-Object).Count
 Write-Host "Got the contact data from IT Glue. $ContactCount contacts were found."
+Write-PSFMessage -Level Verbose -Message "Got '$($ContactCount)' contacts from IT Glue."
 
 # Get the list of locations for later
 $Locations = (Get-ITGlueLocations -org_id $OrgID).data
@@ -118,6 +135,7 @@ $HasMultipleLocations = $false
 if (($Locations | Measure-Object).Count -gt 1) {
 	$HasMultipleLocations = $true
 }
+Write-PSFMessage -Level Verbose -Message "Got $(($Locations | Measure-Object).Count) locations from IT Glue."
 
 # Get the organizations name
 $OrganizationInfo = (Get-ITGlueOrganizations -id $OrgID).data
@@ -135,17 +153,20 @@ $EmployeeContacts = $FullContactList.attributes | Where-Object {$_."contact-type
 #### Use parameter -UserAudit $true   (default off)
 ################
 if ($UserAudit) {
+	Write-PSFMessage -Level Verbose -Message "Starting User Audit."
 
 	# Get the existing matched list from the user audit
 	$auditFilesPath = "C:\billing_audit\contacts.json"
 	if (Test-Path $auditFilesPath) {
 		$MatchedContactList = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+		Write-PSFMessage -Level Verbose -Message "Imported existing matched list."
 	}
 
 	if ($CheckAD) {
 		# Get all AD users
 		Write-Host "===================================" -ForegroundColor Blue
 		Write-Host "Getting AD users to look for disabled users."
+		Write-PSFMessage -Level Verbose -Message "Getting AD users."
 		$FullADUsers = Get-ADUser -Filter * -Properties * | 
 							Select-Object -Property Name, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
 											Description, LastLogonDate, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
@@ -153,6 +174,8 @@ if ($UserAudit) {
 											@{Name="PrimaryCN"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)')[0].Groups[2]}}, 
 											@{Name="CNs"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)').Value -replace 'CN='}}, 
 											City, Department, Division, Title
+		Write-PSFMessage -Level Verbose -Message "Got $(($FullADUsers | Measure-Object).Count) users from AD."
+
 		# Get groups
 		$FullADUsers | ForEach-Object {
 			$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
@@ -283,6 +306,7 @@ if ($UserAudit) {
 		}
 		$ADMatchCount = ($ADMatches | Measure-Object).Count
 		Write-Host "Finished matching all IT Glue contacts to their AD accounts. $ADMatchCount matches were made."
+		Write-PSFMessage -Level Verbose -Message "Matched: all IT Glue contacts to AD accounts. $ADMatchCount matches made."
 	}
 
 	# Get the existing unmatched AD list from the user audit
@@ -296,10 +320,13 @@ if ($UserAudit) {
 	}
 
 	$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" }
+	Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) unmatched AD accounts."
 	$UnmatchedAD = $UnmatchedAD | Where-Object { $_.Username -notin $OldUnmatchedADUsernames } # filter out accounts that have already been reviewed
+	Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) new unmatched AD accounts."
 
 	if ($CheckEmail -and (($EmailType -eq "O365" -and $O365UnattendedLogin -and $O365UnattendedLogin.AppId) -or $EmailType -eq "Exchange")) {
 		Write-Host "Getting $EmailType Mailboxes. This may take a minute..." -ForegroundColor 'black' -BackgroundColor 'red'
+		Write-PSFMessage -Level Verbose -Message "Getting $EmailType Mailboxes."
 
 		if ($EmailType -eq "O365") {
 			$O365Mailboxes = Get-EXOMailbox -ResultSize unlimited -PropertySets Minimum, AddressList, Delivery, SoftDelete | 
@@ -307,6 +334,7 @@ if ($UserAudit) {
 					RecipientTypeDetails, Guid, UserPrincipalName, 
 					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
 				Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
+			Write-PSFMessage -Level Verbose -Message "Got $(($O365Mailboxes | Measure-Object).Count) mailboxes from O365."
 			$DisabledAccounts = Get-AzureADUser -Filter "AccountEnabled eq false" | Select-Object -ExpandProperty UserPrincipalName
 			$UnlicensedUsers = Get-AzureADUser | Where-Object {
 				$licensed = $false
@@ -383,6 +411,7 @@ if ($UserAudit) {
 					RecipientTypeDetails, AccountDisabled, IsDirSynced, Guid,
 					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
 				Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
+			Write-PSFMessage -Level Verbose -Message "Got $(($O365Mailboxes | Measure-Object).Count) mailboxes from Exchange."
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name FirstName -Value $null
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name LastName -Value $null
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name Title -Value $null
@@ -399,6 +428,7 @@ if ($UserAudit) {
 
 		$MailboxCount = ($O365Mailboxes | Measure-Object).Count
 		Write-Host "Got all $MailboxCount mailboxes. Now comparing them with IT Glue accounts."
+		Write-PSFMessage -Level Verbose -Message "Got $MailboxCount mailboxes."
 
 		# Cleanup the email list
 		for ($i = 0; $i -lt $O365Mailboxes.Count; $i++) {
@@ -568,6 +598,7 @@ if ($UserAudit) {
 		}
 		$O365MatchCount = ($O365Matches | Measure-Object).Count
 		Write-Host "Finished matching all IT Glue contacts to their email accounts. $O365MatchCount matches were made."
+		Write-PSFMessage -Level Verbose -Message "Matched: all IT Glue contacts to mailboxes. $O365MatchCount matches made."
 
 		# Get the existing unmatched O365 list from the user audit
 		$auditFilesPath = "C:\billing_audit\unmatchedO365.json"
@@ -580,9 +611,12 @@ if ($UserAudit) {
 		}
 
 		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 }
+		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedO365 | Measure-Object).Count) unmatched mailboxes."
 		$UnmatchedO365 = $UnmatchedO365 | Where-Object { $_.PrimarySmtpAddress -notin $OldUnmatchedO365Emails } # filter out accounts that have already been reviewed
+		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedO365 | Measure-Object).Count) new unmatched mailboxes."
 	} else {
 		$CheckEmail = $false # Set to $false in case it is true and we aren't using unattended login
+		Write-PSFMessage -Level Warning -Message "Mailbox check not running."
 	}
 
 	function buildMatch {
@@ -652,12 +686,14 @@ if ($UserAudit) {
 	}
 
 	Write-Host "All matches between IT Glue and AD have now been made. Audit commencing."
+	Write-PSFMessage -Level Verbose -Message "All matches found. Total matches: $(($FullMatches | Measure-Object).Count)"
 
 	#############################################
 	##### Matches Made. Find Discrepancies. #####
 	#############################################
 
 	if ($FullMatches) {
+		Write-PSFMessage -Level Verbose -Message "Searching for discrepancies."
 		$WarnContacts = New-Object -TypeName "System.Collections.Generic.List[Object] "
 
 		foreach ($Match in $FullMatches) {
@@ -904,6 +940,7 @@ if ($UserAudit) {
 
 		$WarnCount = ($WarnContacts | Measure-Object).Count
 		Write-Host "Audit complete. $($WarnCount) issues have been found."
+		Write-PSFMessage -Level Verbose -Message "Audit complete. Issues found: $($WarnCount)"
 
 		if ($WarnCount -gt 0) {
 			$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
@@ -1048,6 +1085,7 @@ if ($UserAudit) {
 	}
 
 	Write-Host "User Audit Complete!" -ForegroundColor Black -BackgroundColor Green
+	Write-PSFMessage -Level Verbose -Message "User Audit Complete."
 }
 # END device audit
 
@@ -1065,12 +1103,14 @@ if ($UserAudit) {
 #### TODO: Move this code into an external function that both this script and the User Audit script can use instead of copying the code
 ################
 if ($BillingUpdate) {
+	Write-PSFMessage -Level Verbose -Message "Starting Billing Update."
 	If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
 	
 	# Get a fresh list of contacts from IT Glue
 	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
 	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
 	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
+	Write-PSFMessage -Level Verbose -Message "Got $(($FullContactList | Measure-Object).Count) contacts from IT Glue."
 
 	# Export a csv into the billing history folder (overwrite if same month)
 	New-Item -ItemType Directory -Force -Path "C:\billing_history" | Out-Null
@@ -1080,9 +1120,11 @@ if ($BillingUpdate) {
 	$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
 	$historyContacts | Out-File -FilePath $historyPath
 	Write-Host "Exported a billing history file."
+	Write-PSFMessage -Level Verbose -Message "Exported billing history file: $historyPath"
 
 	# Export billing user list to CSV
 	Write-Host "Generating billing report..."
+	Write-PSFMessage -Level Verbose -Message "Generating Billing Report."
 
 	# First get the history file if it exists to perform a diff
 	$Month = Get-Date -Format "MM"
@@ -1561,6 +1603,7 @@ if ($BillingUpdate) {
 
 	Close-ExcelPackage $excel
 	Write-Host "Excel Report Exported." -ForegroundColor Green
+	Write-PSFMessage -Level Verbose -Message "Excel Report Exported."
 
 	#######
 	### Upload billing report to ITG
@@ -1686,12 +1729,14 @@ if ($BillingUpdate) {
 		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.id) {
 			Set-ITGlueFlexibleAssets -id $ExistingFlexAsset.data.id -data $FlexAssetBody | Out-Null
 			Write-Host "Updated existing $FlexAssetName asset."
+			Write-PSFMessage -Level Verbose -Message "Updated existing: $FlexAssetName asset"
 		} else {
 			$FlexAssetBody.attributes."organization-id" = $OrgID
 			$FlexAssetBody.attributes."flexible-asset-type-id" = $FilterID.id
 			$FlexAssetBody.attributes.traits."billed-by" = "User"
 			$ExistingFlexAsset = New-ITGlueFlexibleAssets -data $FlexAssetBody
 			Write-Host "Uploaded a new $FlexAssetName asset."
+			Write-PSFMessage -Level Verbose -Message "Uploaded new: $FlexAssetName asset"
 		}
 
 		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.id) {
@@ -1706,6 +1751,7 @@ if ($BillingUpdate) {
 			}
 			New-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingFlexAsset.data.id -data $data | Out-Null
 			Write-Host "Billing report uploaded and attached." -ForegroundColor Green
+			Write-PSFMessage -Level Verbose -Message "Uploaded: Billing report"
 		}
 
 		# If there were changes to the amount of billed users, send an email to account (or if no billing history and this is a new setup)
@@ -1787,17 +1833,21 @@ if ($BillingUpdate) {
 			
 			Invoke-RestMethod -Method Post -Uri $Email_APIEndpoint -Body $mailbody -Headers $headers -ContentType application/json
 			Write-Host "Email Sent" -ForegroundColor Green
+			Write-PSFMessage -Level Verbose -Message "Billing update email sent. Subject: $Subject"
 		}
 		
 	} else {
 		Write-Host "Something went wrong when trying to find the $FlexAssetName asset type. Could not update IT Glue." -ForegroundColor Red
+		Write-PSFMessage -Level Warning -Message "Error. Could not get ID of asset type: $FlexAssetName"
 	}
 
 	Write-Host "Billing Update Complete!" -ForegroundColor Black -BackgroundColor Green
+	Write-PSFMessage -Level Verbose -Message "Billing Update Complete."
 
 	#  Export an Office 365 license report
 	if ($CheckEmail -and $EmailType -eq "O365") {
 		Write-Host "Exporting Office 365 license report..."
+		Write-PSFMessage -Level Verbose -Message "Exporting Office 365 License Report."
 		$LicensePlanList = Get-AzureADSubscribedSku
 		$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
 	
@@ -1932,6 +1982,7 @@ if ($BillingUpdate) {
 			}
 			New-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
 			Write-Host "O365 license overview xls uploaded and attached." -ForegroundColor Green
+			Write-PSFMessage -Level Verbose -Message "Office 365 License Report Export Complete."
 		}
 	}
 }
@@ -1939,8 +1990,10 @@ if ($BillingUpdate) {
 # Close email sessions
 if ($EmailType -eq "O365") {
 	Disconnect-ExchangeOnline -Confirm:$false
+	Write-PSFMessage -Level Verbose -Message "Disconnected from O365."
 } elseif ($ExchangeServerFQDN) {
 	Remove-PSSession $Session
 }
 
 Write-Host "Script Completed."
+Write-PSFMessage -Level Verbose -Message "Script Complete."
