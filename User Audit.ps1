@@ -101,7 +101,7 @@ Export-ITGlueModuleSettings
 $CosmosDBModule = Get-Module -ListAvailable -Name "CosmosDB"
 
 # If installed and not version 0.0.1 (my custom version), uninstall
-if ($CosmosDBModule -and ($CosmosDBModule.Version.Major -ne 0 -or $CosmosDBModule.Version.Minor -ne 0 -or $CosmosDBModule.Version.Build -ne 2)) {
+if ($CosmosDBModule -and ($CosmosDBModule.Version.Major -ne 0 -or $CosmosDBModule.Version.Minor -ne 0 -or $CosmosDBModule.Version.Build -ne 1)) {
 	Write-Output "Removing old version of CosmosDB module..."
 	Remove-Module -Name "CosmosDB"
 	Uninstall-Module -Name "CosmosDB"
