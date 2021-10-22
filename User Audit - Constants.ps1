@@ -80,7 +80,7 @@ $Device_DB_APIKey =  ""
 #
 # Example: "https://keybroker.azurewebsites.net/api/KeyBroker?code=DM5utp67MRnkNjbSwow3DGC6h4bPOCp1x==&ResourceURI="
 #
-$Device_DB_APIEndpoint = "https://devicedb-keybroker.azurewebsites.net/api/DeviceDB-KeyBroker?code=oxXwGcl9tcbTniElX4rsPVETVpg7YhDs5lmGjnl8iyKnrClSUQnt6A==&ResourceURI="
+$Device_DB_APIEndpoint = ""
 
 ####################
 # $orgID
