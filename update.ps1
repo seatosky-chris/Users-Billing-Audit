@@ -100,6 +100,23 @@ catch [System.Exception] {
     exit
 }
 
+try 
+{
+    Write-Output "[*] CosmosDB.zip"
+    $UpdatePath = "$($PSScriptRoot)\CosmosDB.zip"
+    if (!(Test-Path $UpdatePath)) {
+        $Scripts_CosmosDBZip = (New-Object System.Net.WebClient).Downloadstring("https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/CosmosDB.zip")
+        $Scripts_CosmosDBZip | Out-File $UpdatePath
+        FixFilePermissions -Path $UpdatePath
+    }
+}
+catch [System.Exception] {
+    Write-Output "Error saving CosmosDB.zip"
+    throw
+	Read-Host "Press any key to exit."
+    exit
+}
+
 Write-Output "[*] Done!"
 
 if ($RunAfter) {
