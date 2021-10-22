@@ -2751,7 +2751,7 @@ if ($Device_DB_APIKey -and $Device_DB_APIEndpoint) {
 	if ($Token) {
 		If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
 		If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
-		If (Get-Module -ListAvailable -Name "CosmosDB") {Import-module CosmosDB} Else { install-module CosmosDB -Force; import-module CosmosDB}
+		#If (Get-Module -ListAvailable -Name "CosmosDB") {Import-module CosmosDB} Else { install-module CosmosDB -Force; import-module CosmosDB}
 		
 		$collectionId = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'Users'
 		$contextToken = New-CosmosDbContextToken `
