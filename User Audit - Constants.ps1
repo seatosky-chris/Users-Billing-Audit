@@ -64,6 +64,25 @@ $Email_APIKey =  ""
 $Email_APIEndpoint = ""
 
 ####################
+# $Device_DB_APIKey
+#
+# The API key from the Device DB Key Broker
+#
+# Example: "STS.4466731b-1437-4f38-85ad-28f628c9db76"
+#
+$Device_DB_APIKey =  ""
+
+####################
+# $Device_DB_APIEndpoint
+#
+# The device db key broker azure function endpoint
+# The default URL here should be correct, you just need to add the code.
+#
+# Example: "https://keybroker.azurewebsites.net/api/KeyBroker?code=DM5utp67MRnkNjbSwow3DGC6h4bPOCp1x==&ResourceURI="
+#
+$Device_DB_APIEndpoint = "https://devicedb-keybroker.azurewebsites.net/api/DeviceDB-KeyBroker?code=oxXwGcl9tcbTniElX4rsPVETVpg7YhDs5lmGjnl8iyKnrClSUQnt6A==&ResourceURI="
+
+####################
 # $orgID
 #
 # The organizations ID in IT Glue. You can get this by navigating to their page in IT Glue, then getting the number from the URL.

@@ -91,10 +91,33 @@ if ($Version.Major -lt 2 -or $Version.Minor -lt 1) {
 	Import-Module ITGlueAPI -Force
 }
 If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
+
 # Settings IT-Glue logon information
 Add-ITGlueBaseURI -base_uri $APIEndpoint
 Add-ITGlueAPIKey $APIKEy
 Export-ITGlueModuleSettings
+
+# Install our custom version of the CosmosDB module (if necessary)
+$CosmosDBModule = Get-Module -ListAvailable -Name "CosmosDB"
+
+# If installed and not version 0.0.1 (my custom version), uninstall
+if ($CosmosDBModule -and ($CosmosDBModule.Version.Major -ne 0 -or $CosmosDBModule.Version.Minor -ne 0 -or $CosmosDBModule.Version.Build -ne 2)) {
+	Write-Output "Removing old version of CosmosDB module..."
+	Remove-Module -Name "CosmosDB"
+	Uninstall-Module -Name "CosmosDB"
+	Remove-Item -LiteralPath "C:\Program Files\WindowsPowerShell\Modules\CosmosDB" -Force -Recurse -ErrorAction Ignore
+	$CosmosDBModule = $false
+}
+
+if (!$CosmosDBModule) {
+	$unzipPath = "C:\temp"
+	if (!(test-path $unzipPath)) {
+		New-Item -ItemType Directory -Force -Path $unzipPath
+	}
+	Expand-Archive "$PSScriptRoot\CosmosDB.zip" -DestinationPath $unzipPath
+	Move-Item -Path "$($unzipPath)\CosmosDB" -Destination "C:\Program Files\WindowsPowerShell\Modules\" -Force
+}
+Import-module CosmosDB
 
 # This line allows popup boxes to work
 Add-Type -AssemblyName PresentationFramework
@@ -2716,6 +2739,91 @@ $historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).
 $historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
 $historyContacts | Out-File -FilePath $historyPath
 Write-Host "Exported a billing history file."
+
+# Update the Device Audit DB if applicable
+if ($Device_DB_APIKey -and $Device_DB_APIEndpoint) {
+	$headers = @{
+		'x-api-key' = $Device_DB_APIKey
+	}
+	
+	$Token = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers
+
+	if ($Token) {
+		If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
+		If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
+		If (Get-Module -ListAvailable -Name "CosmosDB") {Import-module CosmosDB} Else { install-module CosmosDB -Force; import-module CosmosDB}
+		
+		$collectionId = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'Users'
+		$contextToken = New-CosmosDbContextToken `
+			-Resource $collectionId `
+			-TimeStamp (Get-Date $Token.Timestamp) `
+			-TokenExpiry $Token.Life `
+			-Token (ConvertTo-SecureString -String $Token.Token -AsPlainText -Force) 
+
+		$DB_Name = 'DeviceUsage'
+		$CustomerAcronym = $Device_DB_APIKey.split('.')[0]
+		$CosmosDBAccount = "stats-$($CustomerAcronym)".ToLower()
+		$resourceContext = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken
+
+		if ($resourceContext) {
+			$Query = "SELECT * FROM Users u"
+			$ExistingUsers = Get-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Query $Query -PartitionKey 'user'
+
+			if ($ExistingUsers) {
+				$Now_UTC = Get-Date (Get-Date).ToUniversalTime() -UFormat '+%Y-%m-%dT%H:%M:%S.000Z'
+				$UserCount = ($ExistingUsers | Measure-Object).Count
+				$i = 0
+				foreach ($User in $ExistingUsers) {
+					$i++
+					$Match = $FullMatches | Where-Object { $_.'AD-Username' -eq $User.Username } | Select-Object -First 1
+
+					[int]$PercentComplete = ($i / $UserCount * 100)
+					Write-Progress -Activity "Updating users in Device Audit Database." -PercentComplete $PercentComplete -Status ("Working - " + $PercentComplete + "% (Updating: $($User.Username)")
+
+					if (!$Match) {
+						$EscapedUsername = [Regex]::Escape($User.Username)
+						$Match = $FullMatches | Where-Object { $_.'ITG-Notes' -match ".*(Username: " + $EscapedUsername + "(\s|W|$)).*" } | Select-Object -First 1
+
+						if (!$Match -and $User.DomainOrLocal -eq "Local") {
+							$Match = $FullMatches | Where-Object { $_.'ITG-Notes' -match ".*(Local Account: " + $EscapedUsername + "(\s|W|$)).*" } | Select-Object -First 1
+						}
+
+						# Still no match, fall back to email-only search
+						if (!$Match) {
+							$Match = $FullMatches | Where-Object { $_.'O365-PrimarySmtp' -match "$EscapedUsername\.user@" -or $_.'ITG-Notes' -match ".*(Primary O365 Email: " + $EscapedUsername + "@).*" } | Select-Object -First 1
+						}
+					}
+
+					$UpdateRequired = $false
+					# If changing fields, update in device audit as well
+					$UpdatedUser = $User | Select-Object Id, Domain, DomainOrLocal, Username, LastUpdated, type, O365Email, ITG_ID, ADUsername
+
+					if ($Match) {
+						if ($Match.'AD-Username' -and $User.ADUsername -ne $Match.'AD-Username') {
+							$UpdatedUser.ADUsername = $Match.'AD-Username'
+							$UpdateRequired = $true
+						}
+						if ($Match.'O365-PrimarySmtp' -and $User.O365Email -ne $Match.'O365-PrimarySmtp') {
+							$UpdatedUser.O365Email = $Match.'O365-PrimarySmtp'
+							$UpdateRequired = $true
+						}
+						if ($Match.id -and $User.ITG_ID -ne $Match.id) {
+							$UpdatedUser.ITG_ID = $Match.id
+							$UpdateRequired = $true
+						}
+					}
+
+					$UserID = $User.Id
+					if ($UpdateRequired) {
+						$UpdatedUser.LastUpdated = $Now_UTC
+						Set-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Id $UserID -DocumentBody ($UpdatedUser | ConvertTo-Json) -PartitionKey 'user' | Out-Null
+					}
+				}
+				Write-Progress -Activity "Updating users in Device Audit Database." -Status "Ready" -Completed
+			}
+		}
+	}
+}
 
 $ExportChoice = $false
 $ExportChoice = [System.Windows.MessageBox]::Show('Would you like to export the full user list showing matched AD/O365 accounts?', 'Export Matched User List', 'YesNo')
