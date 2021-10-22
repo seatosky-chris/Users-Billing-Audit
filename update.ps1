@@ -106,7 +106,6 @@ try
     $UpdatePath = "$($PSScriptRoot)\CosmosDB.zip"
     if (!(Test-Path $UpdatePath)) {
         Invoke-RestMethod -Uri "https://github.com/seatosky-chris/Users-Billing-Audit/raw/main/CosmosDB.zip" -OutFile $UpdatePath
-        $Scripts_CosmosDBZip | Out-File $UpdatePath
         FixFilePermissions -Path $UpdatePath
     }
 }
