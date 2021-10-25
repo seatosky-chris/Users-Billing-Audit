@@ -2295,7 +2295,7 @@ if ($FullMatches) {
 					# ImproperlyTerminated
 					$WarnObj.type = "ImproperlyTerminated"
 					$WarnObj.reason = "AD Account Improperly Disabled. Please review and fix. (Description lists Disabled but account is not disabled.)"
-				} elseif ((!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly)) -and $ContactType -ne "Employee - On Leave" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+				} elseif ((!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly)) -and $ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate"
 					$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
