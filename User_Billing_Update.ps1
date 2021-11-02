@@ -171,6 +171,7 @@ $EmployeeContacts = $FullContactList.attributes | Where-Object {$_."contact-type
 ################
 #### Running a User Audit
 #### This will check for issues and open a ticket to get them fixed
+#### At the end it will update the device audit DB, if applicable
 #### Use parameter -UserAudit $true   (default off)
 ################
 if ($UserAudit) {
@@ -1105,47 +1106,8 @@ if ($UserAudit) {
 		}
 	}
 
-	Write-Host "User Audit Complete!" -ForegroundColor Black -BackgroundColor Green
-	Write-PSFMessage -Level Verbose -Message "User Audit Complete."
-}
-# END device audit
-
-
-################
-#### Running a Billing Update
-#### This will get the contact list from ITG and update the billing document
-#### If there were changes from last month it will send an email to accounting
-#### This will also update the device audit DB if applicable
-#### Use parameter -BillingUpdate $true   (default off)
-####
-#### Note: This code is almost directly pulled from the User Audit powershell script
-####		The only difference is a small amount of code to check for changes and send an email at the end if changes were found
-####		Search "Custom Code" to find this bit of code
-####
-#### TODO: Move this code into an external function that both this script and the User Audit script can use instead of copying the code
-################
-if ($BillingUpdate) {
-	Write-PSFMessage -Level Verbose -Message "Starting Billing Update."
-	If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
-	
-	# Get a fresh list of contacts from IT Glue
-	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
-	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
-	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
-	Write-PSFMessage -Level Verbose -Message "Got $(($FullContactList | Measure-Object).Count) contacts from IT Glue."
-
-	# Export a csv into the billing history folder (overwrite if same month)
-	New-Item -ItemType Directory -Force -Path "C:\billing_history" | Out-Null
-	$Month = Get-Date -Format "MM"
-	$Year = Get-Date -Format "yyyy"
-	$historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data | ConvertTo-Json
-	$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
-	$historyContacts | Out-File -FilePath $historyPath
-	Write-Host "Exported a billing history file."
-	Write-PSFMessage -Level Verbose -Message "Exported billing history file: $historyPath"
-
 	# Update the Device Audit DB if applicable
-	if ($Device_DB_APIKey -and $Device_DB_APIEndpoint) {
+	if ($FullMatches -and $Device_DB_APIKey -and $Device_DB_APIEndpoint) {
 		$headers = @{
 			'x-api-key' = $Device_DB_APIKey
 		}
@@ -1228,6 +1190,44 @@ if ($BillingUpdate) {
 			}
 		}
 	}
+
+	Write-Host "User Audit Complete!" -ForegroundColor Black -BackgroundColor Green
+	Write-PSFMessage -Level Verbose -Message "User Audit Complete."
+}
+# END device audit
+
+
+################
+#### Running a Billing Update
+#### This will get the contact list from ITG and update the billing document
+#### If there were changes from last month it will send an email to accounting
+#### Use parameter -BillingUpdate $true   (default off)
+####
+#### Note: This code is almost directly pulled from the User Audit powershell script
+####		The only difference is a small amount of code to check for changes and send an email at the end if changes were found
+####		Search "Custom Code" to find this bit of code
+####
+#### TODO: Move this code into an external function that both this script and the User Audit script can use instead of copying the code
+################
+if ($BillingUpdate) {
+	Write-PSFMessage -Level Verbose -Message "Starting Billing Update."
+	If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
+	
+	# Get a fresh list of contacts from IT Glue
+	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
+	Write-PSFMessage -Level Verbose -Message "Got $(($FullContactList | Measure-Object).Count) contacts from IT Glue."
+
+	# Export a csv into the billing history folder (overwrite if same month)
+	New-Item -ItemType Directory -Force -Path "C:\billing_history" | Out-Null
+	$Month = Get-Date -Format "MM"
+	$Year = Get-Date -Format "yyyy"
+	$historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data | ConvertTo-Json
+	$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
+	$historyContacts | Out-File -FilePath $historyPath
+	Write-Host "Exported a billing history file."
+	Write-PSFMessage -Level Verbose -Message "Exported billing history file: $historyPath"
 
 	# Export billing user list to CSV
 	Write-Host "Generating billing report..."
