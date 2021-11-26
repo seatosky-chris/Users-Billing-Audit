@@ -267,6 +267,10 @@ if ($UserAudit) {
 				# First and last name
 				$ADMatch += $ADEmployees | Where-Object { $_.GivenName -like $FirstName -and $_.Surname -like $LastName }
 				if ($ADMatch) { break; }
+				if ($LastName -eq ".") {
+					$ADMatch += $ADEmployees | Where-Object { $_.GivenName -like $FirstName -and $_.Surname -like "" }
+					if ($ADMatch) { break; }
+				}
 				# Other emails & first name if more than 1 is found
 				foreach ($Email in $Emails) {
 					if (!$Email) { continue; }
