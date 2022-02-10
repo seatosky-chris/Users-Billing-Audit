@@ -8,6 +8,7 @@ Set-ExecutionPolicy Unrestricted
 . "$PSScriptRoot\User Audit - Constants.ps1"
 . "$PSScriptRoot\O365Licenses.ps1"
 $CustomOverview_FlexAssetID = 219027
+$ScriptsLast_FlexAssetID = 251261
 $GitHubVersion = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/currentversion.txt"
 $UpdateFile = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Audit/main/update.ps1"
 #####################################################################
@@ -167,6 +168,11 @@ $OrgShortName = $OrganizationInfo[0].attributes."short-name"
 $FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
 $FullContactList | ForEach-Object { $_.attributes.id = $_.id }
 $EmployeeContacts = $FullContactList.attributes | Where-Object {$_."contact-type-name" -in $EmployeeContactTypes -or !$_."contact-type-name"}
+
+$UserCleanupUpdateRan = $false
+$UserBillingUpdateRan = $false
+$UserO365ReportUpdated = $false
+
 
 ################
 #### Running a User Audit
@@ -967,6 +973,7 @@ if ($UserAudit) {
 		$WarnCount = ($WarnContacts | Measure-Object).Count
 		Write-Host "Audit complete. $($WarnCount) issues have been found."
 		Write-PSFMessage -Level Verbose -Message "Audit complete. Issues found: $($WarnCount)"
+		$UserCleanupUpdateRan = $true
 
 		if ($WarnCount -gt 0) {
 			$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
@@ -1945,6 +1952,9 @@ if ($BillingUpdate) {
 			Invoke-RestMethod -Method Post -Uri $Email_APIEndpoint -Body $mailbody -Headers $headers -ContentType application/json
 			Write-Host "Email Sent" -ForegroundColor Green
 			Write-PSFMessage -Level Verbose -Message "Billing update email sent. Subject: $Subject"
+			$UserBillingUpdateRan = $true
+		} else {
+			$UserBillingUpdateRan = $true
 		}
 		
 	} else {
@@ -2094,10 +2104,106 @@ if ($BillingUpdate) {
 			New-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
 			Write-Host "O365 license overview xls uploaded and attached." -ForegroundColor Green
 			Write-PSFMessage -Level Verbose -Message "Office 365 License Report Export Complete."
+			$UserO365ReportUpdated = $true
 		}
 	}
 }
 
+# Update / Create the "Scripts - Last Run" ITG page which shows when the user audit (and other scripts) last ran
+if ($ScriptsLast_FlexAssetID -and $orgID) {
+	$LastUpdatedPage = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $ScriptsLast_FlexAssetID -filter_organization_id $orgID
+
+	if (!$LastUpdatedPage -or !$LastUpdatedPage.data) {
+		# Upload new to ITG
+		$FlexAssetBody = 
+		@{
+			type = 'flexible-assets'
+			attributes = @{
+				'organization-id' = $orgID
+				'flexible-asset-type-id' = $ScriptsLast_FlexAssetID
+				traits = @{
+					"name" = "Scripts - Last Run"
+					"current-version" = "N/A"
+				}
+			}
+		}
+		$LastUpdatedPage = New-ITGlueFlexibleAssets -data $FlexAssetBody
+		Write-Host "Created a new 'Scripts - Last Run' page."
+	}
+	
+	if ($LastUpdatedPage) {
+		# Update asset with last run times for the user audit
+		$UserCleanupTime = $LastUpdatedPage.data.attributes.traits."contact-audit"
+		if ($UserCleanupUpdateRan) {
+			$UserCleanupTime = (Get-Date).ToString("yyyy-MM-dd")
+		}
+		$UserBillingUpdateTime = $LastUpdatedPage.data.attributes.traits."billing-update-ua"
+		if ($UserBillingUpdateRan) {
+			$UserBillingUpdateTime = (Get-Date).ToString("yyyy-MM-dd")
+		}
+		$UserO365ReportUpdateTime = $LastUpdatedPage.data.attributes.traits."o365-license-report"
+		if ($UserO365ReportUpdated) {
+			$UserO365ReportUpdateTime = (Get-Date).ToString("yyyy-MM-dd")
+		}
+
+		$FlexAssetBody = 
+		@{
+			type = 'flexible-assets'
+			attributes = @{
+				traits = @{
+					"name" = "Scripts - Last Run"
+
+					"current-version" = $CurrentVersion
+					"contact-audit" = $UserCleanupTime
+					"contact-audit-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."contact-audit-monitoring-disabled"
+					"billing-update-ua" = $UserBillingUpdateTime
+					"billing-update-ua-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."billing-update-ua-monitoring-disabled"
+					"o365-license-report" = $UserO365ReportUpdateTime
+					"o365-license-report-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."o365-license-report-monitoring-disabled"
+
+					"device-cleanup" = $LastUpdatedPage.data.attributes.traits."device-cleanup"
+					"device-cleanup-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."device-cleanup-monitoring-disabled"
+					"device-usage" = $LastUpdatedPage.data.attributes.traits."device-usage"
+					"device-usage-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."device-usage-monitoring-disabled"
+					"device-locations" = $LastUpdatedPage.data.attributes.traits."device-locations"
+					"device-locations-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."device-locations-monitoring-disabled"
+					"monthly-stats-rollup" = $LastUpdatedPage.data.attributes.traits."monthly-stats-rollup"
+					"monthly-stats-rollup-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."monthly-stats-rollup-monitoring-disabled"
+					"billing-update-da" = $LastUpdatedPage.data.attributes.traits."billing-update-da"
+					"billing-update-da-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."billing-update-da-monitoring-disabled"
+
+					"contact-cleanup" = $LastUpdatedPage.data.attributes.traits."contact-cleanup"
+					"contact-cleanup-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."contact-cleanup-monitoring-disabled"
+					"active-directory" = $LastUpdatedPage.data.attributes.traits."active-directory"
+					"active-directory-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."active-directory-monitoring-disabled"
+					"ad-groups" = $LastUpdatedPage.data.attributes.traits."ad-groups"
+					"ad-groups-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."ad-groups-monitoring-disabled"
+					"o365-groups" = $LastUpdatedPage.data.attributes.traits."o365-groups"
+					"o365-groups-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."o365-groups-monitoring-disabled"
+					"hyper-v" = $LastUpdatedPage.data.attributes.traits."hyper-v"
+					"hyper-v-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."hyper-v-monitoring-disabled"
+					"file-shares" = $LastUpdatedPage.data.attributes.traits."file-shares"
+					"file-shares-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."file-shares-monitoring-disabled"
+					"licensing-overview" = $LastUpdatedPage.data.attributes.traits."licensing-overview"
+					"licensing-overview-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."licensing-overview-monitoring-disabled"
+					"meraki-licensing" = $LastUpdatedPage.data.attributes.traits."meraki-licensing"
+					"meraki-licensing-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."meraki-licensing-monitoring-disabled"
+					"bluebeam-licensing" = $LastUpdatedPage.data.attributes.traits."bluebeam-licensing"
+					"bluebeam-licensing-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."bluebeam-licensing-monitoring-disabled"
+
+					"custom-scripts" = $LastUpdatedPage.data.attributes.traits."custom-scripts"
+				}
+			}
+		}
+		# Filter out empty values
+		($FlexAssetBody.attributes.traits.GetEnumerator() | Where-Object { -not $_.Value }) | Foreach-Object { 
+			$FlexAssetBody.attributes.traits.Remove($_.Name) 
+		}
+
+		Set-ITGlueFlexibleAssets -id $LastUpdatedPage.data.id -data $FlexAssetBody
+		Write-Host "Updated the 'Scripts - Last Run' page."
+	}
+}
 
 
 # Close email sessions
