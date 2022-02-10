@@ -2131,7 +2131,7 @@ if ($ScriptsLast_FlexAssetID -and $orgID) {
 		Write-Host "Created a new 'Scripts - Last Run' page."
 	}
 	
-	if ($LastUpdatedPage) {
+	if ($LastUpdatedPage -and $LastUpdatedPage.data) {
 		# Update asset with last run times for the user audit
 		$UserCleanupTime = $LastUpdatedPage.data.attributes.traits."contact-audit"
 		if ($UserCleanupUpdateRan) {
@@ -2146,14 +2146,14 @@ if ($ScriptsLast_FlexAssetID -and $orgID) {
 			$UserO365ReportUpdateTime = (Get-Date).ToString("yyyy-MM-dd")
 		}
 
-		$FlexAssetBody = 
+		$LastUpdated_FlexAssetBody = 
 		@{
 			type = 'flexible-assets'
 			attributes = @{
 				traits = @{
 					"name" = "Scripts - Last Run"
 
-					"current-version" = $CurrentVersion
+					"current-version" = "$($CurrentVersion | Out-String)"
 					"contact-audit" = $UserCleanupTime
 					"contact-audit-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."contact-audit-monitoring-disabled"
 					"billing-update-ua" = $UserBillingUpdateTime
@@ -2196,11 +2196,11 @@ if ($ScriptsLast_FlexAssetID -and $orgID) {
 			}
 		}
 		# Filter out empty values
-		($FlexAssetBody.attributes.traits.GetEnumerator() | Where-Object { -not $_.Value }) | Foreach-Object { 
-			$FlexAssetBody.attributes.traits.Remove($_.Name) 
+		($LastUpdated_FlexAssetBody.attributes.traits.GetEnumerator() | Where-Object { -not $_.Value }) | Foreach-Object { 
+			$LastUpdated_FlexAssetBody.attributes.traits.Remove($_.Name) 
 		}
 
-		Set-ITGlueFlexibleAssets -id $LastUpdatedPage.data.id -data $FlexAssetBody
+		Set-ITGlueFlexibleAssets -id $LastUpdatedPage.data.id -data $LastUpdated_FlexAssetBody
 		Write-Host "Updated the 'Scripts - Last Run' page."
 	}
 }
