@@ -44,6 +44,16 @@ $APIKEy =  ""
 $APIEndpoint = ""
 
 ####################
+# $LastUpdatedUpdater_APIURL
+#
+# The endpoint URL for the Last Updated Updater azure function. 
+# This is used to updated the "Scripts - Last Updated" asset in ITG.
+#
+# Example: "https://lastupdatedupdater.azurewebsites.net/api/LastUpdatedUpdater?code=xxxx=="
+#
+$LastUpdatedUpdater_APIURL = ""
+
+####################
 # $Email_APIKey
 #
 # The organization specific APIKey for the email forwarder. 

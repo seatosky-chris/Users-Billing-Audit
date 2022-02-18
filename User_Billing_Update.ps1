@@ -2110,99 +2110,56 @@ if ($BillingUpdate) {
 }
 
 # Update / Create the "Scripts - Last Run" ITG page which shows when the user audit (and other scripts) last ran
-if ($ScriptsLast_FlexAssetID -and $orgID) {
-	$LastUpdatedPage = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $ScriptsLast_FlexAssetID -filter_organization_id $orgID
-
-	if (!$LastUpdatedPage -or !$LastUpdatedPage.data) {
-		# Upload new to ITG
-		$FlexAssetBody = 
-		@{
-			type = 'flexible-assets'
-			attributes = @{
-				'organization-id' = $orgID
-				'flexible-asset-type-id' = $ScriptsLast_FlexAssetID
-				traits = @{
-					"name" = "Scripts - Last Run"
-					"current-version" = "N/A"
+if ($LastUpdatedUpdater_APIURL -and $orgID) {
+	if ($ScriptsLast_FlexAssetID) {
+		$LastUpdatedPage = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $ScriptsLast_FlexAssetID -filter_organization_id $orgID
+		if (!$LastUpdatedPage -or !$LastUpdatedPage.data) {
+			# Upload new to ITG
+			$FlexAssetBody = 
+			@{
+				type = 'flexible-assets'
+				attributes = @{
+					'organization-id' = $orgID
+					'flexible-asset-type-id' = $ScriptsLast_FlexAssetID
+					traits = @{
+						"name" = "Scripts - Last Run"
+						"current-version" = "N/A"
+					}
 				}
 			}
+			$LastUpdatedPage = New-ITGlueFlexibleAssets -data $FlexAssetBody
+			Write-Host "Created a new 'Scripts - Last Run' page."
 		}
-		$LastUpdatedPage = New-ITGlueFlexibleAssets -data $FlexAssetBody
-		Write-Host "Created a new 'Scripts - Last Run' page."
 	}
-	
-	if ($LastUpdatedPage -and $LastUpdatedPage.data) {
-		# Update asset with last run times for the user audit
-		$UserCleanupTime = $LastUpdatedPage.data.attributes.traits."contact-audit"
-		if ($UserCleanupUpdateRan) {
-			$UserCleanupTime = (Get-Date).ToString("yyyy-MM-dd")
-		}
-		$UserBillingUpdateTime = $LastUpdatedPage.data.attributes.traits."billing-update-ua"
-		if ($UserBillingUpdateRan) {
-			$UserBillingUpdateTime = (Get-Date).ToString("yyyy-MM-dd")
-		}
-		$UserO365ReportUpdateTime = $LastUpdatedPage.data.attributes.traits."o365-license-report"
-		if ($UserO365ReportUpdated) {
-			$UserO365ReportUpdateTime = (Get-Date).ToString("yyyy-MM-dd")
-		}
 
-		$LastUpdated_FlexAssetBody = 
-		@{
-			type = 'flexible-assets'
-			attributes = @{
-				traits = @{
-					"name" = "Scripts - Last Run"
-
-					"current-version" = "$($CurrentVersion | Out-String)"
-					"contact-audit" = $UserCleanupTime
-					"contact-audit-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."contact-audit-monitoring-disabled"
-					"billing-update-ua" = $UserBillingUpdateTime
-					"billing-update-ua-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."billing-update-ua-monitoring-disabled"
-					"o365-license-report" = $UserO365ReportUpdateTime
-					"o365-license-report-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."o365-license-report-monitoring-disabled"
-
-					"device-cleanup" = $LastUpdatedPage.data.attributes.traits."device-cleanup"
-					"device-cleanup-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."device-cleanup-monitoring-disabled"
-					"device-usage" = $LastUpdatedPage.data.attributes.traits."device-usage"
-					"device-usage-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."device-usage-monitoring-disabled"
-					"device-locations" = $LastUpdatedPage.data.attributes.traits."device-locations"
-					"device-locations-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."device-locations-monitoring-disabled"
-					"monthly-stats-rollup" = $LastUpdatedPage.data.attributes.traits."monthly-stats-rollup"
-					"monthly-stats-rollup-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."monthly-stats-rollup-monitoring-disabled"
-					"billing-update-da" = $LastUpdatedPage.data.attributes.traits."billing-update-da"
-					"billing-update-da-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."billing-update-da-monitoring-disabled"
-
-					"contact-cleanup" = $LastUpdatedPage.data.attributes.traits."contact-cleanup"
-					"contact-cleanup-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."contact-cleanup-monitoring-disabled"
-					"active-directory" = $LastUpdatedPage.data.attributes.traits."active-directory"
-					"active-directory-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."active-directory-monitoring-disabled"
-					"ad-groups" = $LastUpdatedPage.data.attributes.traits."ad-groups"
-					"ad-groups-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."ad-groups-monitoring-disabled"
-					"o365-groups" = $LastUpdatedPage.data.attributes.traits."o365-groups"
-					"o365-groups-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."o365-groups-monitoring-disabled"
-					"hyper-v" = $LastUpdatedPage.data.attributes.traits."hyper-v"
-					"hyper-v-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."hyper-v-monitoring-disabled"
-					"file-shares" = $LastUpdatedPage.data.attributes.traits."file-shares"
-					"file-shares-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."file-shares-monitoring-disabled"
-					"licensing-overview" = $LastUpdatedPage.data.attributes.traits."licensing-overview"
-					"licensing-overview-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."licensing-overview-monitoring-disabled"
-					"meraki-licensing" = $LastUpdatedPage.data.attributes.traits."meraki-licensing"
-					"meraki-licensing-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."meraki-licensing-monitoring-disabled"
-					"bluebeam-licensing" = $LastUpdatedPage.data.attributes.traits."bluebeam-licensing"
-					"bluebeam-licensing-monitoring-disabled" = $LastUpdatedPage.data.attributes.traits."bluebeam-licensing-monitoring-disabled"
-
-					"custom-scripts" = $LastUpdatedPage.data.attributes.traits."custom-scripts"
-				}
-			}
-		}
-		# Filter out empty values
-		($LastUpdated_FlexAssetBody.attributes.traits.GetEnumerator() | Where-Object { -not $_.Value }) | Foreach-Object { 
-			$LastUpdated_FlexAssetBody.attributes.traits.Remove($_.Name) 
-		}
-
-		Set-ITGlueFlexibleAssets -id $LastUpdatedPage.data.id -data $LastUpdated_FlexAssetBody
-		Write-Host "Updated the 'Scripts - Last Run' page."
+	# Update asset with last run times for the user audit
+	$Headers = @{
+        "x-api-key" = $APIKEy
+    }
+    $Body = @{
+        "apiurl" = $APIEndpoint
+        "itgOrgID" = $orgID
+        "HostDevice" = $env:computername
+		"current-version" = "$($CurrentVersion | Out-String)"
+    }
+	if ($UserCleanupUpdateRan) {
+		$Body.Add("contact-audit", (Get-Date).ToString("yyyy-MM-dd"))
 	}
+	if ($UserBillingUpdateRan) {
+		$Body.Add("billing-update-ua", (Get-Date).ToString("yyyy-MM-dd"))
+	}
+	if ($UserO365ReportUpdated) {
+		$Body.Add("o365-license-report", (Get-Date).ToString("yyyy-MM-dd"))
+	}
+
+    $Params = @{
+        Method = "Post"
+        Uri = $LastUpdatedUpdater_APIURL
+        Headers = $Headers
+        Body = ($Body | ConvertTo-Json)
+        ContentType = "application/json"
+    }			
+    Invoke-RestMethod @Params 
 }
 
 
