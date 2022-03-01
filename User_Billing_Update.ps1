@@ -1001,7 +1001,7 @@ if ($UserAudit) {
 			$ContactWarningsJson | Out-File -FilePath $auditFilesPath
 			Write-Host "Exported contact warnings to a json file."
 
-			if ($WarnContacts) {
+			if ($WarnContacts -and $EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
 				# Create some html for an email based on the $WarnContacts
 				$DueDate = $(get-date).AddDays(5).ToString("dddd, MMMM d")
 				$HTMLBody = ""
@@ -1874,7 +1874,10 @@ if ($BillingUpdate) {
 
 		# If there were changes to the amount of billed users, send an email to account (or if no billing history and this is a new setup)
 		# Custom Code
-		if (!(Test-Path variable:HistoryContactList) -or ($CheckChanges -and $TotalChanges -and (($TotalChanges | Select-Object -Last 1)."Billed FT" -ne 0 -or ($TotalChanges | Select-Object -Last 1)."Billed PT" -ne 0))) {
+		if ($EmailFrom.Email -and $EmailTo_BillingUpdate[0] -and $EmailTo_BillingUpdate[0].Email -and 
+			(!(Test-Path variable:HistoryContactList) -or 
+			($CheckChanges -and $TotalChanges -and (($TotalChanges | Select-Object -Last 1)."Billed FT" -ne 0 -or ($TotalChanges | Select-Object -Last 1)."Billed PT" -ne 0)))) 
+		{
 
 			# No past billing history
 			if (!(Test-Path variable:HistoryContactList) -or !$CheckChanges) {
