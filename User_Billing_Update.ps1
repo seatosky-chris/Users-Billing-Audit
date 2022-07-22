@@ -720,6 +720,135 @@ if ($UserAudit) {
 	Write-Host "All matches between IT Glue and AD have now been made. Audit commencing."
 	Write-PSFMessage -Level Verbose -Message "All matches found. Total matches: $(($FullMatches | Measure-Object).Count)"
 
+	# Update the Device Audit DB if applicable and get usage data if applicable
+	$UserUsage = @()
+	if ($FullMatches -and $Device_DB_APIKey -and $Device_DB_APIEndpoint) {
+		If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
+		If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
+		#If (Get-Module -ListAvailable -Name "CosmosDB") {Import-module CosmosDB} Else { install-module CosmosDB -Force; import-module CosmosDB}
+
+		$headers = @{
+			'x-api-key' = $Device_DB_APIKey
+		}
+		$body = @{
+			'tokenType' = 'users'
+		}
+		
+		$Token = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
+		if ($Token) {			
+			$collectionId = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'Users'
+			$contextToken = New-CosmosDbContextToken `
+				-Resource $collectionId `
+				-TimeStamp (Get-Date $Token.Timestamp) `
+				-TokenExpiry $Token.Life `
+				-Token (ConvertTo-SecureString -String $Token.Token -AsPlainText -Force) 
+
+			$DB_Name = 'DeviceUsage'
+			$CustomerAcronym = $Device_DB_APIKey.split('.')[0]
+			$CosmosDBAccount = "stats-$($CustomerAcronym)".ToLower()
+			$resourceContext = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken
+
+			if ($resourceContext) {
+				$Query = "SELECT * FROM Users u"
+				$ExistingUsers = Get-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Query $Query -PartitionKey 'user'
+
+				if ($ExistingUsers) {
+					$Now_UTC = Get-Date (Get-Date).ToUniversalTime() -UFormat '+%Y-%m-%dT%H:%M:%S.000Z'
+					$UserCount = ($ExistingUsers | Measure-Object).Count
+					$i = 0
+					foreach ($User in $ExistingUsers) {
+						$i++
+						$Match = $FullMatches | Where-Object { $_.'AD-Username' -eq $User.Username } | Select-Object -First 1
+
+						[int]$PercentComplete = ($i / $UserCount * 100)
+						Write-Progress -Activity "Updating users in Device Audit Database." -PercentComplete $PercentComplete -Status ("Working - " + $PercentComplete + "% (Updating: $($User.Username)")
+
+						if (!$Match) {
+							$EscapedUsername = [Regex]::Escape($User.Username)
+							$Match = $FullMatches | Where-Object { $_.'ITG-Notes' -match ".*(Username: " + $EscapedUsername + "(\s|W|$)).*" } | Select-Object -First 1
+
+							if (!$Match -and $User.DomainOrLocal -eq "Local") {
+								$Match = $FullMatches | Where-Object { $_.'ITG-Notes' -match ".*(Local Account: " + $EscapedUsername + "(\s|W|$)).*" } | Select-Object -First 1
+							}
+
+							# Still no match, fall back to email-only search
+							if (!$Match) {
+								$Match = $FullMatches | Where-Object { $_.'O365-PrimarySmtp' -match "$EscapedUsername\.user@" -or $_.'ITG-Notes' -match ".*(Primary O365 Email: " + $EscapedUsername + "@).*" } | Select-Object -First 1
+							}
+						}
+
+						$UpdateRequired = $false
+						# If changing fields, update in device audit as well
+						$UpdatedUser = $User | Select-Object Id, Domain, DomainOrLocal, Username, LastUpdated, type, O365Email, ITG_ID, ADUsername
+
+						if ($Match) {
+							if ($Match.'AD-Username' -and $User.ADUsername -ne $Match.'AD-Username') {
+								$UpdatedUser.ADUsername = $Match.'AD-Username'
+								$User.ADUsername = $Match.'AD-Username'
+								$UpdateRequired = $true
+							}
+							if ($Match.'O365-PrimarySmtp' -and $User.O365Email -ne $Match.'O365-PrimarySmtp') {
+								$UpdatedUser.O365Email = $Match.'O365-PrimarySmtp'
+								$User.O365Email = $Match.'O365-PrimarySmtp'
+								$UpdateRequired = $true
+							}
+							if ($Match.id -and $User.ITG_ID -ne $Match.id) {
+								$UpdatedUser.ITG_ID = $Match.id
+								$User.ITG_ID = $Match.id
+								$UpdateRequired = $true
+							}
+						}
+
+						$UserID = $User.Id
+						if ($UpdateRequired) {
+							$UpdatedUser.LastUpdated = $Now_UTC
+							$User.LastUpdated = $Now_UTC
+							Set-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Id $UserID -DocumentBody ($UpdatedUser | ConvertTo-Json) -PartitionKey 'user' | Out-Null
+						}
+					}
+					Write-Progress -Activity "Updating users in Device Audit Database." -Status "Ready" -Completed
+				}
+			}
+
+			# Get user usage info from Device Audit DB if configured to look for part time employees
+			if ($PartTimeEmployeesByUsage -and $PartTimeEmployeesByUsage -and $ExistingUsers) {
+				$body = @{
+					'tokenType' = 'userusage'
+				}
+				$Token2 = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
+
+				if ($Token2) {
+					$collectionId2 = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'UserUsage'
+					$contextToken2 = New-CosmosDbContextToken `
+						-Resource $collectionId2 `
+						-TimeStamp (Get-Date $Token2.Timestamp) `
+						-TokenExpiry $Token2.Life `
+						-Token (ConvertTo-SecureString -String $Token2.Token -AsPlainText -Force) 
+					$resourceContext2 = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken2
+
+					if ($resourceContext2) {
+						$Query2 = "SELECT * FROM UserUsage AS uu"
+						$UserUsage = Get-CosmosDbDocument -Context $resourceContext2 -Database $DB_Name -CollectionId "UserUsage" -Query $Query2 -QueryEnableCrossPartition $true
+
+						if ($UserUsage) {
+							foreach ($Usage in $UserUsage) {
+								$ExistingUser = $ExistingUsers | Where-Object { $_.Id -eq $Usage.Id }
+								$Usage | Add-Member -MemberType NoteProperty -Name User -Value $null
+								if ($ExistingUser) {
+									$Usage.User = $ExistingUser
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (!$UserUsage -or ($UserUsage | Measure-Object).Count -le 0) {
+		$PartTimeEmployeesByUsage = $false
+	}
+
 	#############################################
 	##### Matches Made. Find Discrepancies. #####
 	#############################################
@@ -741,6 +870,21 @@ if ($UserAudit) {
 			if ($Contact.notes -match '\# Ignore ([\w\[\]]+) Warnings') {
 				$IgnoreTypes = ([regex]::Matches($Contact.notes, '\# Ignore ([\w\[\]]+) Warnings').Groups | Where-Object { "Groups" -notin $_.PSObject.Properties.Name }).Value
 				$IgnoreWarnings += $IgnoreTypes
+			}
+
+			$PartTimeUsage = $false
+			if ($PartTimeEmployeesByUsage) {
+				$UsageStats = $UserUsage | Where-Object { $_.User.ITG_ID -eq $MatchID }
+				if ($UsageStats) {
+					$LastMonthDate = Get-Date (Get-Date).AddMonths(-1) -Format "yyyy-MM"
+					$TwoMonthsAgoDate = Get-Date (Get-Date).AddMonths(-2) -Format "yyyy-MM"
+					$LastMonthUsage = $UsageStats.DaysActive.HistoryPercent.$LastMonthDate
+					$TwoMonthsAgoUsage = $UsageStats.DaysActive.HistoryPercent.$TwoMonthsAgoDate
+
+					if ($LastMonthUsage -and $LastMonthUsage -lt $PartTimePercentage -and $LastMonthUsage -gt 0 -and (!$TwoMonthsAgoUsage -or $TwoMonthsAgoUsage -lt $PartTimePercentage)) {
+						$PartTimeUsage = $true
+					}
+				}
 			}
 
 			###########
@@ -795,11 +939,23 @@ if ($UserAudit) {
 						# MaybeTerminate
 						$WarnObj.type = "MaybeTerminate"
 						$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
+						if ($ADMatch.LastLogonDate) {
+							$LastLoginDaysAgo = (New-TimeSpan -Start $ADMatch.LastLogonDate -End (Get-Date)).Days
+							if ($ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) { $WarnObj.reason += " (Last Login: $($LastLoginDaysAgo) days ago)" }
+						} else {
+							$WarnObj.reason += " (Last Login: Never)"
+						}
 						# If $InactivityO365Preference is $true, this gets skipped and will only be checked in the O365 section if the O365 account is inactive
 					} elseif ($ContactType -eq 'Terminated' -and 'ToEnabled' -notin $IgnoreWarnings) {
 						# ToEnabled
 						$WarnObj.type = "ToEnabled"
 						$WarnObj.reason = "AD Account Enabled. IT Glue Contact should not be 'Terminated'."
+					} elseif ($ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+								$PartTimeUsage -and !$EmailOnly -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
+						# ToEmployeePartTime
+						$WarnObj.type = "ToEmployeePartTime"
+						$WarnObj.reason = "AD account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
+						if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
 					} elseif ($ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Contractor" -and $ContactType -notlike "Vendor" -and $EmailOnly -and 'ToEmailOnly' -notin $IgnoreWarnings) {
 						#ToEmailOnly
 						$WarnObj.type = "ToEmailOnly"
@@ -920,6 +1076,12 @@ if ($UserAudit) {
 					} else {	
 						$WarnObj.reason = "$EmailType account has no associated AD account. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
 					}
+				} elseif ($ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+							$PartTimeUsage -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
+					# ToEmployeePartTime
+					$WarnObj.type = "ToEmployeePartTime"
+					$WarnObj.reason = "$EmailType account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
+					if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
 				} elseif (!$ContactType -and !$HasAD) {
 					#NoContactType
 					$WarnObj.type = "NoContactType"
@@ -1113,91 +1275,6 @@ if ($UserAudit) {
 				
 				Invoke-RestMethod -Method Post -Uri $Email_APIEndpoint -Body $mailbody -Headers $headers -ContentType application/json
 				Write-Host "Sent Email" -ForegroundColor Green
-			}
-		}
-	}
-
-	# Update the Device Audit DB if applicable
-	if ($FullMatches -and $Device_DB_APIKey -and $Device_DB_APIEndpoint) {
-		$headers = @{
-			'x-api-key' = $Device_DB_APIKey
-		}
-		
-		$Token = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers
-
-		if ($Token) {
-			If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
-			If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
-			#If (Get-Module -ListAvailable -Name "CosmosDB") {Import-module CosmosDB} Else { install-module CosmosDB -Force; import-module CosmosDB}
-			
-			$collectionId = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'Users'
-			$contextToken = New-CosmosDbContextToken `
-				-Resource $collectionId `
-				-TimeStamp (Get-Date $Token.Timestamp) `
-				-TokenExpiry $Token.Life `
-				-Token (ConvertTo-SecureString -String $Token.Token -AsPlainText -Force) 
-
-			$DB_Name = 'DeviceUsage'
-			$CustomerAcronym = $Device_DB_APIKey.split('.')[0]
-			$CosmosDBAccount = "stats-$($CustomerAcronym)".ToLower()
-			$resourceContext = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken
-
-			if ($resourceContext) {
-				$Query = "SELECT * FROM Users u"
-				$ExistingUsers = Get-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Query $Query -PartitionKey 'user'
-
-				if ($ExistingUsers) {
-					$Now_UTC = Get-Date (Get-Date).ToUniversalTime() -UFormat '+%Y-%m-%dT%H:%M:%S.000Z'
-					$UserCount = ($ExistingUsers | Measure-Object).Count
-					$i = 0
-					foreach ($User in $ExistingUsers) {
-						$i++
-						$Match = $FullMatches | Where-Object { $_.'AD-Username' -eq $User.Username } | Select-Object -First 1
-
-						[int]$PercentComplete = ($i / $UserCount * 100)
-						Write-Progress -Activity "Updating users in Device Audit Database." -PercentComplete $PercentComplete -Status ("Working - " + $PercentComplete + "% (Updating: $($User.Username)")
-
-						if (!$Match) {
-							$EscapedUsername = [Regex]::Escape($User.Username)
-							$Match = $FullMatches | Where-Object { $_.'ITG-Notes' -match ".*(Username: " + $EscapedUsername + "(\s|W|$)).*" } | Select-Object -First 1
-
-							if (!$Match -and $User.DomainOrLocal -eq "Local") {
-								$Match = $FullMatches | Where-Object { $_.'ITG-Notes' -match ".*(Local Account: " + $EscapedUsername + "(\s|W|$)).*" } | Select-Object -First 1
-							}
-
-							# Still no match, fall back to email-only search
-							if (!$Match) {
-								$Match = $FullMatches | Where-Object { $_.'O365-PrimarySmtp' -match "$EscapedUsername\.user@" -or $_.'ITG-Notes' -match ".*(Primary O365 Email: " + $EscapedUsername + "@).*" } | Select-Object -First 1
-							}
-						}
-
-						$UpdateRequired = $false
-						# If changing fields, update in device audit as well
-						$UpdatedUser = $User | Select-Object Id, Domain, DomainOrLocal, Username, LastUpdated, type, O365Email, ITG_ID, ADUsername
-
-						if ($Match) {
-							if ($Match.'AD-Username' -and $User.ADUsername -ne $Match.'AD-Username') {
-								$UpdatedUser.ADUsername = $Match.'AD-Username'
-								$UpdateRequired = $true
-							}
-							if ($Match.'O365-PrimarySmtp' -and $User.O365Email -ne $Match.'O365-PrimarySmtp') {
-								$UpdatedUser.O365Email = $Match.'O365-PrimarySmtp'
-								$UpdateRequired = $true
-							}
-							if ($Match.id -and $User.ITG_ID -ne $Match.id) {
-								$UpdatedUser.ITG_ID = $Match.id
-								$UpdateRequired = $true
-							}
-						}
-
-						$UserID = $User.Id
-						if ($UpdateRequired) {
-							$UpdatedUser.LastUpdated = $Now_UTC
-							Set-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Id $UserID -DocumentBody ($UpdatedUser | ConvertTo-Json) -PartitionKey 'user' | Out-Null
-						}
-					}
-					Write-Progress -Activity "Updating users in Device Audit Database." -Status "Ready" -Completed
-				}
 			}
 		}
 	}

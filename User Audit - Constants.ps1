@@ -225,6 +225,22 @@ $EmailOnlyGroupsIgnore = @(
 $InactivityO365Preference = $false 
 
 ####################
+# $PartTimeEmployeesByUsage
+# 
+# Get usage info from the Device Audit DB and use usage stats to determine which employee's might be part-time employee's and who is full-time.
+# The $Device_DB_APIKey and $Device_DB_APIEndpoint variables must also be configured.
+# This will only work if the user has a minimum of 1 full month of device audit usage data, if any less it will just consider the user a regular employee.
+#
+$PartTimeEmployeesByUsage = $false 
+
+####################
+# $PartTimePercentage
+# 
+# Any usage below this percent will be considered part-time, anything equals and above, full-time
+#
+$PartTimePercentage = 70
+
+####################
 # $TotalsByLocation
 # 
 # When exporting a billing report, if $true, a section will be included with the total amount of billed and unbilled users per-location.
