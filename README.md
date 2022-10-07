@@ -7,7 +7,9 @@ This script can be used as a pre-cleanup of Autotask contacts. As these are sync
 The script cleans up locations, addresses, allows mapping of addresses to locations, cleans up duplicate contacts, and marks contacts for removal with (Old). After anything gets marked as Old, it is up to you to merge the contacts and de-activate the old contact. If duplicate matching is working poorly, try disabling `$DuplicatesOnEmails` (which will prevent it for looking for duplicates based on email).
 
 ### User Audit - Constants
-This contains all of the variables for both the User Audit and User Billing Update scripts. The file contains extensive comments to help you fill out the required variables. This must be setup before using either of the following 2 scripts. A constants file is specific to a certain customer and must reside in the same folder as the User Audit or User Billing Update script. More info on script configuration can be found in our internal ITG documentation.
+This contains all of the variables for both the User Audit and User Billing Update scripts. The file contains extensive comments to help you fill out the required variables. This must be setup before using either of the following 2 scripts. A constants file is specific to a certain customer and must reside in the same folder as the User Audit or User Billing Update script. Alternatively, you can setup multiple User Audit's on one device if doing a cloud-only audit (e.g. Azure & O365); in this case use a Constants folder and the $config param to choose the config you want at-run. More info on script configuration can be found in our internal ITG documentation.
+
+For setting up the O365 Unattended Login details, see: https://github.com/seatosky-chris/Users-Billing-Audit/wiki/Configure-Certificate-for-Unattended-Powershell-Access
 
 ### User Audit
 This script can be run manually to do a full user audit on an ITG contact list. It will compare the contacts to AD and Office 365 (or Exchange) then provide suggestions on required changes. It must be setup on the customer's AD server and the Constants file must be filled in for it to work. The script will store files in `C:\billing_history\`.
@@ -33,3 +35,4 @@ If running a user audit, after the script has matched users and found discrepanc
 
 User Audit Example: `PowerShell.exe -ExecutionPolicy Bypass -File "C:\seatosky\User_Billing_Update.ps1" -UserAudit`
 Billing Report Example: `PowerShell.exe -ExecutionPolicy Bypass -File "C:\seatosky\User_Billing_Update.ps1" -BillingUpdate`
+User Audit with Config Selection Example: `PowerShell.exe -ExecutionPolicy Bypass -File "C:\seatosky\User_Billing_Update.ps1" -UserAudit -config "STS Constants"`

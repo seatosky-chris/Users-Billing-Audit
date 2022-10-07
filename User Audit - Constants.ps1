@@ -111,6 +111,15 @@ $orgID = ""
 $CheckAD = $true
 
 ####################
+# $ADType
+#
+# This can be set to either "OnPremise" or "Azure"
+# This will only be used if $CheckAD = $true
+# If set to Azure, then be sure the $O365UnattendedLogin details are configured properly
+#
+$ADType = "OnPremise"
+
+####################
 # $CheckEmail
 #
 # If $true, the audit script will connect IT Glue contacts to their email accounts in O365 or Exchange. 

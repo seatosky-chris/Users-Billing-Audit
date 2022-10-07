@@ -1,5 +1,8 @@
 #Requires -RunAsAdministrator
-param ([switch]$UserAudit = $false, [switch]$BillingUpdate = $false)
+param (
+	$config = $false,
+	[switch]$UserAudit = $false, [switch]$BillingUpdate = $false
+)
 Set-ExecutionPolicy Unrestricted
 
 #####################################################################
@@ -14,11 +17,34 @@ $UpdateFile = "https://raw.githubusercontent.com/seatosky-chris/Users-Billing-Au
 #####################################################################
 Write-Host "User audit starting..."
 
+### Load Variables from external file
+### Make sure you setup your variables in the User Audit - Constants.ps1 file
+### Or if this is a central audit for customers that are cloud based, create a Constants folder
+### and include a Constants file for each customer to be audited. Then use the $config param to set
+### the config file to be used for the current run. Set $config to the full name of the file (without the file extension). e.g. "BCCP-Config"
+if (!$config) {
+	. "$PSScriptRoot\User Audit - Constants.ps1"
+} elseif (Test-Path -Path "$PSScriptRoot\Constants\$config.ps1") {
+	. "$PSScriptRoot\Constants\$config.ps1"
+} else {
+	Write-Error "Config file not found! Exiting..."
+	exit
+}
+
 # Ensure they are using the latest TLS version
 $CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
 if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
+}
+
+if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azure")) {
+	# This module needs to be imported before others so lets do this right away
+	If (Get-Module -ListAvailable -Name "MSAL.PS") {
+		Import-Module MSAL.PS
+	} else {
+		Install-Module -Name MSAL.PS
+	}
 }
 
 # Setup logging
@@ -109,20 +135,162 @@ Import-module CosmosDB
 Write-Host "Successfully imported required modules and configured the ITGlue API."
 Write-PSFMessage -Level Verbose -Message "Configured ITGlue module."
 
-if ($CheckEmail -and $EmailType -eq "O365" -and $O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
+if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azure")) {
+	Write-Host "Connecting to Azure..."
+	$ClientCertificate = Get-Item "Cert:\LocalMachine\My\$($O365UnattendedLogin.CertificateThumbprint)"
+
+	# Create base64 hash of certificate
+	$CertificateBase64Hash = [System.Convert]::ToBase64String($ClientCertificate.GetCertHash())
+
+	# Create JWT timestamp for expiration
+	$StartDate = (Get-Date "1970-01-01T00:00:00Z" ).ToUniversalTime()
+	$JWTExpirationTimeSpan = (New-TimeSpan -Start $StartDate -End (Get-Date).ToUniversalTime().AddMinutes(2)).TotalSeconds
+	$JWTExpiration = [math]::Round($JWTExpirationTimeSpan,0)
+
+	# Create JWT validity start timestamp
+	$NotBeforeExpirationTimeSpan = (New-TimeSpan -Start $StartDate -End ((Get-Date).ToUniversalTime())).TotalSeconds
+	$NotBefore = [math]::Round($NotBeforeExpirationTimeSpan,0)
+
+	# Create JWT header
+	$JWTHeader = @{
+		alg = "RS256"
+		typ = "JWT"
+		# Use the CertificateBase64Hash and replace/strip to match web encoding of base64
+		x5t = $CertificateBase64Hash -replace '\+','-' -replace '/','_' -replace '='
+	}
+
+	# Create JWT payload
+	$JWTPayLoad = @{
+		# What endpoint is allowed to use this JWT
+		aud = "https://login.microsoftonline.com/$($O365UnattendedLogin.TenantID)/oauth2/token"
+
+		# Expiration timestamp
+		exp = $JWTExpiration
+
+		# Issuer = your application
+		iss = $O365UnattendedLogin.AppID
+
+		# JWT ID: random guid
+		jti = [guid]::NewGuid()
+
+		# Not to be used before
+		nbf = $NotBefore
+
+		# JWT Subject
+		sub = $O365UnattendedLogin.AppID
+	}
+
+	# Convert header and payload to base64
+	$JWTHeaderToByte = [System.Text.Encoding]::UTF8.GetBytes(($JWTHeader | ConvertTo-Json))
+	$EncodedHeader = [System.Convert]::ToBase64String($JWTHeaderToByte)
+
+	$JWTPayLoadToByte =  [System.Text.Encoding]::UTF8.GetBytes(($JWTPayload | ConvertTo-Json))
+	$EncodedPayload = [System.Convert]::ToBase64String($JWTPayLoadToByte)
+
+	# Join header and Payload with "." to create a valid (unsigned) JWT
+	$JWT = $EncodedHeader + "." + $EncodedPayload
+
+	# Get the private key object of your certificate
+	$PrivateKey = $ClientCertificate.PrivateKey
+
+	# Define RSA signature and hashing algorithm
+	$RSAPadding = [Security.Cryptography.RSASignaturePadding]::Pkcs1
+	$HashAlgorithm = [Security.Cryptography.HashAlgorithmName]::SHA256
+
+	# Create a signature of the JWT
+	$Signature = [Convert]::ToBase64String(
+		$PrivateKey.SignData([System.Text.Encoding]::UTF8.GetBytes($JWT),$HashAlgorithm,$RSAPadding)
+	) -replace '\+','-' -replace '/','_' -replace '='
+
+	# Join the signature to the JWT with "."
+	$JWT = $JWT + "." + $Signature
+
+	# Create a hash with body parameters
+	$Body = @{
+		client_id = $O365UnattendedLogin.AppID
+		client_assertion = $JWT
+		client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+		scope = "https://graph.microsoft.com/.default"
+		grant_type = "client_credentials"
+
+	}
+
+	$Url = "https://login.microsoftonline.com/$($O365UnattendedLogin.TenantID)/oauth2/v2.0/token"
+
+	# Use the self-generated JWT as Authorization
+	$Header = @{
+		Authorization = "Bearer $JWT"
+	}
+
+	# Splat the parameters for Invoke-Restmethod for cleaner code
+	$PostSplat = @{
+		ContentType = 'application/x-www-form-urlencoded'
+		Method = 'POST'
+		Body = $Body
+		Uri = $Url
+		Headers = $Header
+	}
+	$AzGraphAuthToken = Invoke-RestMethod @PostSplat
+
+	$AzGraphHeader = @{
+		Authorization = "$($AzGraphAuthToken.token_type) $($AzGraphAuthToken.access_token)"
+	}
+
+	If (Get-Module -ListAvailable -Name "AzureAD") {
+		Import-Module AzureAD
+	} else {
+		Install-Module -Name AzureAD
+	}
+	if ($O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
+		Connect-AzureAD -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -ApplicationId $O365UnattendedLogin.AppID -TenantId $O365UnattendedLogin.TenantId
+	} else {
+		Connect-AzureAD -AccountID $O365LoginUser
+	}
+
+	Write-Host "Successfully imported Azure related modules."
+}
+
+if ($CheckEmail) {
 	# Connect to the mail service (it works better doing this first thing)
-	Import-Module AzureAD
-	Import-Module ExchangeOnlineManagement
-	Connect-AzureAD -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -ApplicationId $O365UnattendedLogin.AppID -TenantId $O365UnattendedLogin.TenantId
-	Connect-ExchangeOnline -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -AppID $O365UnattendedLogin.AppID -Organization $O365UnattendedLogin.Organization -ShowProgress $true -ShowBanner:$false
+	if ($EmailType -eq "O365") {
+		Write-Host "Connecting to Office 365..."
+		If (Get-Module -ListAvailable -Name "ExchangeOnlineManagement") {
+			Import-Module ExchangeOnlineManagement
+		} else {
+			Install-Module PowerShellGet -Force
+			Install-Module -Name ExchangeOnlineManagement
+		}
+		if ($O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
+			Connect-ExchangeOnline -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -AppID $O365UnattendedLogin.AppID -Organization $O365UnattendedLogin.Organization -ShowProgress $true -ShowBanner:$false
+		} else {
+			Connect-ExchangeOnline -UserPrincipalName $O365LoginUser -ShowProgress $true -ShowBanner:$false
+		}
+
+		# If using a version under 1.0.1, upgrade
+		$Version = (Get-Module ExchangeOnlineManagement).Version
+		if ($Version.Major -lt 1 -or $Version.Built -lt 1) {
+			Update-Module -Name ExchangeOnlineManagement
+			Import-Module ExchangeOnlineManagement -Force
+		}
+		Write-PSFMessage -Level Verbose -Message "Imported O365 related modules."
+	} elseif ($EmailType -eq "Exchange") {
+		If (Get-Module -ListAvailable -Name "CredentialManager") {
+			Import-Module CredentialManager
+		} else {
+			Install-Module -Name CredentialManager
+		}
+		if ($ExchangeServerFQDN) {
+			Write-Host "Connecting to exchange server..."
+			$Credential = Get-StoredCredential -Target 'ExchangeServer'
+			if (!$Credential) {
+				Write-Error "No Exchange credentials were found. Please run the basic/interactive User Audit and add the credentials when prompted."
+			}
+			$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServerFQDN/PowerShell/" -Authentication Kerberos -Credential $Credential
+			Import-PSSession $Session -DisableNameChecking
+			Write-PSFMessage -Level Verbose -Message "Connected to Exchange Server session."
+		}
+	}
 	Write-Host "Successfully imported email related modules."
-	Write-PSFMessage -Level Verbose -Message "Imported email related modules."
-} elseif ($CheckEmail -and $EmailType -eq "Exchange") {
-	Import-Module CredentialManager
-	$Credential = Get-StoredCredential -Target 'ExchangeServer'
-	$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServerFQDN/PowerShell/" -Authentication Kerberos -Credential $Credential
-	Import-PSSession $Session -DisableNameChecking
-	Write-PSFMessage -Level Verbose -Message "Connected to Exchange Server session."
 }
 
 ###################################################
@@ -183,8 +351,16 @@ $UserO365ReportUpdated = $false
 if ($UserAudit) {
 	Write-PSFMessage -Level Verbose -Message "Starting User Audit."
 
-	# Get the existing matched list from the user audit
-	$auditFilesPath = "C:\billing_audit\contacts.json"
+	# Get the existing matched list from the user audit	
+	New-Item -ItemType Directory -Force -Path "C:\billing_audit" | Out-Null
+	if (!$config) {
+		$auditFilesPath = "C:\billing_audit\contacts.json"
+	} else {
+		if (!(Test-Path -Path "C:\billing_audit\$($OrgShortName)")) {
+			New-Item -Path "C:\billing_audit\$($OrgShortName)" -ItemType Directory | Out-Null
+		}
+		$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contacts.json"
+	}
 	if (Test-Path $auditFilesPath) {
 		$MatchedContactList = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
 		Write-PSFMessage -Level Verbose -Message "Imported existing matched list."
@@ -195,38 +371,82 @@ if ($UserAudit) {
 		Write-Host "===================================" -ForegroundColor Blue
 		Write-Host "Getting AD users to look for disabled users."
 		Write-PSFMessage -Level Verbose -Message "Getting AD users."
-		$FullADUsers = Get-ADUser -Filter * -Properties * | 
-							Select-Object -Property Name, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
-											Description, LastLogonDate, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
-											@{Name="OUs"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)').Value -replace 'OU='}}, 
-											@{Name="PrimaryCN"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)')[0].Groups[2]}}, 
-											@{Name="CNs"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)').Value -replace 'CN='}}, 
-											City, Department, Division, Title
-		Write-PSFMessage -Level Verbose -Message "Got $(($FullADUsers | Measure-Object).Count) users from AD."
 
-		# Get groups
-		$FullADUsers | ForEach-Object {
-			$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
-			$_.Groups = @((Get-ADPrincipalGroupMembership $_.Username | Select-Object Name).Name)
-		}
+		if ($ADType -eq "Azure") {
+			## Azure
+			$ApiUrl = "https://graph.microsoft.com/beta/users?`$select=id,displayName,givenName,surname,userPrincipalName,accountEnabled,signInActivity,city,department,jobTitle,mail,mailNickname,userType,assignedLicenses&`$top=999"
+			$FullADUsers = @()
+	
+			while ($null -ne $ApiUrl) {
+				$Response = Invoke-RestMethod -Uri $ApiUrl -Headers $AzGraphHeader -Method Get -ContentType "application/json"
+				if ($Response.value) {
+					$FullADUsers += $Response.value
+				}
+				$ApiUrl = $Response.'@odata.nextlink'
+			}
+	
+			if (!$FullADUsers) {
+				$FullADUsers = Get-AzureADUser -All $true
+			}
+	
+			$FullADUsers = $FullADUsers | 
+								Select-Object -Property Id, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
+									@{Name="EmailAddress"; E={$_.mail}}, @{Name="Enabled"; E={$_.AccountEnabled}}, @{Name="Description"; E={""}}, SignInActivity,
+									City, Department, @{Name="Division"; E={""}}, @{Name="Title"; E={$_.JobTitle}}, MailNickname, UserType, AssignedLicenses
+			$FullADUsers = $FullADUsers | Where-Object  { $_.UserType -eq "Member" }
+	
+			Write-Host "Got AD accounts. Getting associated AD group memberships."
+			$i = 0
+			$ADUserCount = ($FullADUsers | Measure-Object).Count
+			$FullADUsers | ForEach-Object {
+				$i++
+				$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
+				$_ | Add-Member -MemberType NoteProperty -Name LastLogonDate -Value $null
+				$_ | Add-Member -MemberType NoteProperty -Name UsernameStart -Value $null
+				$_.Groups = @((Get-AzureADUserMembership -ObjectId $_.Id | Select-Object DisplayName).DisplayName)
+				$_.LastLogonDate = if($_.signInActivity.lastSignInDateTime) { [DateTime]$_.signInActivity.lastSignInDateTime } else {$null}
+				$pos = $_.Username.IndexOf("@")
+				$_.UsernameStart = $_.Username.Substring(0, $pos)
+				[int]$PercentComplete = ($i / $ADUserCount * 100)
+				Write-Progress -Activity "Getting AD Group Memberships" -PercentComplete $PercentComplete -Status ("Working - " + $PercentComplete + "%")
+			}
+			Write-Progress -Activity "Getting AD Group Memberships" -Status "Ready" -Completed
+	
+			$ADEmployees = $FullADUsers
+		} else {
+			$FullADUsers = Get-ADUser -Filter * -Properties * | 
+								Select-Object -Property Name, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
+												Description, LastLogonDate, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
+												@{Name="OUs"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)').Value -replace 'OU='}}, 
+												@{Name="PrimaryCN"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)')[0].Groups[2]}}, 
+												@{Name="CNs"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)').Value -replace 'CN='}}, 
+												City, Department, Division, Title
+			Write-PSFMessage -Level Verbose -Message "Got $(($FullADUsers | Measure-Object).Count) users from AD."
 
-		if ($ADIncludeSubFolders) {
-			$ADEmployees = @()
-			foreach ($User in $FullADUsers) {
-				$Intersect = $User.OUs | Where-Object {$ADUserFolders -contains $_}
-				if ($Intersect) {
-					$ADEmployees += $User
-				} else {
-					$Intersect = $User.CNs | Where-Object {$ADUserFolders -contains $_}
+			# Get groups
+			$FullADUsers | ForEach-Object {
+				$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
+				$_.Groups = @((Get-ADPrincipalGroupMembership $_.Username | Select-Object Name).Name)
+			}
+
+			if ($ADIncludeSubFolders) {
+				$ADEmployees = @()
+				foreach ($User in $FullADUsers) {
+					$Intersect = $User.OUs | Where-Object {$ADUserFolders -contains $_}
 					if ($Intersect) {
 						$ADEmployees += $User
+					} else {
+						$Intersect = $User.CNs | Where-Object {$ADUserFolders -contains $_}
+						if ($Intersect) {
+							$ADEmployees += $User
+						}
 					}
 				}
-			}
-		} else {
-			$ADEmployees = $FullADUsers | Where-Object {$_.PrimaryOU -in $ADUserFolders}
-			if (($ADEmployees | Measure-Object).Count -lt (($EmployeeContacts | Measure-Object).Count / 2)) {
-				$ADEmployees += $FullADUsers | Where-Object {$_.PrimaryCN -in $ADUserFolders}
+			} else {
+				$ADEmployees = $FullADUsers | Where-Object {$_.PrimaryOU -in $ADUserFolders}
+				if (($ADEmployees | Measure-Object).Count -lt (($EmployeeContacts | Measure-Object).Count / 2)) {
+					$ADEmployees += $FullADUsers | Where-Object {$_.PrimaryCN -in $ADUserFolders}
+				}
 			}
 		}
 
@@ -264,7 +484,13 @@ if ($UserAudit) {
 			# Look for a match if no match already exists (likely a new contact)
 			while (!$ADMatch) {
 				# Check notes for a username
-				$ADMatch += $ADEmployees | Where-Object { $Notes -match ".*(Username: " + $_.Username + "(\s|W|$)).*" }
+				$ADMatch += $ADEmployees | Where-Object { 
+					if ($ADType -eq "Azure") {
+						$Notes -match ".*(Username: (" + $_.Username + "|" + $_.mailNickname + "|" + $_.UsernameStart + ")(\s|W|$)).*" 
+					} else {
+						$Notes -match ".*(Username: " + $_.Username + "(\s|W|$)).*" 
+					}
+				}
 				if ($ADMatch) { break; }
 				# Primary email search
 				if ($PrimaryEmail) {
@@ -341,8 +567,12 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Matched: all IT Glue contacts to AD accounts. $ADMatchCount matches made."
 	}
 
-	# Get the existing unmatched AD list from the user audit
-	$auditFilesPath = "C:\billing_audit\unmatchedAD.json"
+	# Get the existing unmatched AD list from the user audit	
+	if (!$config) {
+		$auditFilesPath = "C:\billing_audit\unmatchedAD.json"
+	} else {
+		$auditFilesPath = "C:\billing_audit\$($OrgShortName)\unmatchedAD.json"
+	}
 	$OldUnmatchedADUsernames = @()
 	if (Test-Path $auditFilesPath) {
 		$OldUnmatchedAD = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
@@ -633,7 +863,11 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Matched: all IT Glue contacts to mailboxes. $O365MatchCount matches made."
 
 		# Get the existing unmatched O365 list from the user audit
-		$auditFilesPath = "C:\billing_audit\unmatchedO365.json"
+		if (!$config) {
+			$auditFilesPath = "C:\billing_audit\unmatchedO365.json"
+		} else {
+			$auditFilesPath = "C:\billing_audit\$($OrgShortName)\unmatchedO365.json"
+		}
 		$OldUnmatchedO365Emails = @()
 		if (Test-Path $auditFilesPath) {
 			$OldUnmatchedO365 = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
@@ -1142,7 +1376,11 @@ if ($UserAudit) {
 			$WarnContacts = [Collections.Generic.List[Object]]@($WarnContacts)
 
 			# See what inactive accounts we warned on in the past and remove the related warnings
-			$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			if (!$config) {
+				$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			} else {
+				$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
+			}
 			$OldContactWarnings = @()
 			if (Test-Path $auditFilesPath) {
 				$OldContactWarnings = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
@@ -1156,10 +1394,13 @@ if ($UserAudit) {
 			}
 
 			# Export a full list of what we just warned on and what we warned on in the past
-			New-Item -ItemType Directory -Force -Path "C:\billing_audit" | Out-Null
 			$AllContactWarnings = @(($WarnContacts | ConvertTo-Json | ConvertFrom-Json)) + $OldContactWarnings
 			$ContactWarningsJson = $AllContactWarnings | ConvertTo-Json
-			$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			if (!$config) {
+				$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			} else {
+				$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
+			}
 			$ContactWarningsJson | Out-File -FilePath $auditFilesPath
 			Write-Host "Exported contact warnings to a json file."
 
@@ -1312,7 +1553,14 @@ if ($BillingUpdate) {
 	$Month = Get-Date -Format "MM"
 	$Year = Get-Date -Format "yyyy"
 	$historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data | ConvertTo-Json
-	$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
+	if (!$config) {
+		$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
+	} else {
+		if (!(Test-Path -Path "C:\billing_history\$($OrgShortName)")) {
+			New-Item -Path "C:\billing_history\$($OrgShortName)" -ItemType Directory | Out-Null
+		}
+		$historyPath = "C:\billing_history\$($OrgShortName)\contacts_$($Month)_$($Year).json"
+	}
 	$historyContacts | Out-File -FilePath $historyPath
 	Write-Host "Exported a billing history file."
 	Write-PSFMessage -Level Verbose -Message "Exported billing history file: $historyPath"
@@ -1331,7 +1579,11 @@ if ($BillingUpdate) {
 		$LastYear = $Year - 1
 	}
 	$CheckChanges = $false
-	$historyPath = "C:\billing_history\contacts_$($LastMonth)_$($LastYear).json"
+	if (!$config) {
+		$historyPath = "C:\billing_history\contacts_$($LastMonth)_$($LastYear).json"
+	} else {
+		$historyPath = "C:\billing_history\$($OrgShortName)\contacts_$($LastMonth)_$($LastYear).json"
+	}
 	if (Test-Path $historyPath) {
 		$CheckChanges = $true
 		$HistoryContactList = Get-Content -Path $historyPath -Raw | ConvertFrom-Json
