@@ -1405,6 +1405,18 @@ if ($UserAudit) {
 			Write-Host "Exported contact warnings to a json file."
 
 			if ($WarnContacts -and $EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
+				# Lets add info on any duplicate contacts (only if other warnings exist)
+				$UniqueContacts = $FullContactList.attributes."name" | Select-Object -Unique
+				$DuplicateContacts = @()
+				if ($UniqueContacts) {
+					$DuplicateContacts = Compare-Object -ReferenceObject $UniqueContacts -DifferenceObject $FullContactList.attributes."name"
+				}
+				$DuplicateIDs = @()
+
+				foreach ($Contact in $DuplicateContacts.InputObject) {
+					$DuplicateIDs += ($FullContactList | Where-Object { $_.attributes.name -like $Contact }).id
+				}
+
 				# Create some html for an email based on the $WarnContacts
 				$DueDate = $(get-date).AddDays(5).ToString("dddd, MMMM d")
 				$HTMLBody = ""
