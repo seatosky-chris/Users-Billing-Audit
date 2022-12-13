@@ -325,6 +325,18 @@ if ($FullContactList.Error) {
 	$FullContactList = $FullContactList.data
 }
 
+if ($FullContactList.Count -gt 999) {
+	$FullContactList = @()
+	$i = 1
+	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		Write-Host "- Got contact set $i"
+		$TotalContacts = ($FullContactList | Measure-Object).Count
+		Write-Host "- Total: $TotalContacts"
+		$i++
+	}
+}
+
 # Get the contact types list from IT Glue for later
 $FullContactTypes = (Get-ITGlueContactTypes -sort "name").data
 $ContactTypes = @()
@@ -520,7 +532,15 @@ if ($RunPreCleanup -eq 'Yes') {
 
 	# Re-get the contact list
 	Write-Host "Getting an updated contact list from IT Glue."
-	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+	$FullContactList = @()
+	$i = 1
+	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		Write-Host "- Got contact set $i"
+		$TotalContacts = ($FullContactList | Measure-Object).Count
+		Write-Host "- Total: $TotalContacts"
+		$i++
+	}
 	Write-Host "===================================" -ForegroundColor Blue
 }
 
@@ -580,7 +600,15 @@ if (($FixContactEmails | Measure-Object).count -gt 0 -or ($FixContactPhone | Mea
 	
 	# Re-get the contact list
 	Write-Host "Getting an updated contact list from IT Glue."
-	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+	$FullContactList = @()
+	$i = 1
+	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		Write-Host "- Got contact set $i"
+		$TotalContacts = ($FullContactList | Measure-Object).Count
+		Write-Host "- Total: $TotalContacts"
+		$i++
+	}
 	Write-Host "===================================" -ForegroundColor Blue
 	
 } else {
@@ -3095,7 +3123,15 @@ if ($FullMatches) {
 
 # Re-get the contact list (since we likely just updated the types)
 Write-Host "Getting an updated contact list from IT Glue."
-$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+$FullContactList = @()
+$i = 1
+while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+	$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+	Write-Host "- Got contact set $i"
+	$TotalContacts = ($FullContactList | Measure-Object).Count
+	Write-Host "- Total: $TotalContacts"
+	$i++
+}
 $FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
 $FullContactList | ForEach-Object { $_.attributes.id = $_.id }
 $EmployeeContacts = $FullContactList.attributes | Where-Object {$_."contact-type-name" -in $EmployeeContactTypes -or !$_."contact-type-name"}
@@ -3106,7 +3142,7 @@ Write-Host "===================================" -ForegroundColor Blue
 New-Item -ItemType Directory -Force -Path "C:\billing_history" | Out-Null
 $Month = Get-Date -Format "MM"
 $Year = Get-Date -Format "yyyy"
-$historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data | ConvertTo-Json
+$historyContacts = $FullContactList | ConvertTo-Json
 if (!$config) {
 	$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
 } else {
@@ -3323,7 +3359,15 @@ if ($ExportChoice -eq 'Yes') {
 	}
 
 	# Get a fresh list of contacts from IT Glue
-	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+	$FullContactList = @()
+	$i = 1
+	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		Write-Host "- Got contact set $i"
+		$TotalContacts = ($FullContactList | Measure-Object).Count
+		Write-Host "- Total: $TotalContacts"
+		$i++
+	}
 	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
 	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
 	if ($CheckChanges) {

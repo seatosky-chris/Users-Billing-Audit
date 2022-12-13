@@ -312,6 +312,18 @@ if ($FullContactList.Error) {
 	$FullContactList = $FullContactList.data
 }
 
+if ($FullContactList.Count -gt 999) {
+	$FullContactList = @()
+	$i = 1
+	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		Write-Host "- Got contact set $i"
+		$TotalContacts = ($FullContactList | Measure-Object).Count
+		Write-Host "- Total: $TotalContacts"
+		$i++
+	}
+}
+
 $ContactCount = ($FullContactList | Measure-Object).Count
 Write-Host "Got the contact data from IT Glue. $ContactCount contacts were found."
 Write-PSFMessage -Level Verbose -Message "Got '$($ContactCount)' contacts from IT Glue."
@@ -1503,6 +1515,23 @@ if ($UserAudit) {
 					$HTMLBody += '</ul><br />'
 				}
 
+				if (($DuplicateIDs | Measure-Object).Count -gt 0) {
+					$HTMLBody += '<br />
+							<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>Possible Duplicate ITG Contacts Found</strong></p>
+							<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								The following ITG Contacts may be duplicates. Please review and remove/combine any contacts where necessary.
+							</p>
+							<ul>
+					'
+
+					foreach ($ID in $DuplicateIDs) {
+						$Contact = $FullContactList | Where-Object { $_.id -eq $ID }
+						$PrimaryEmail = ($Contact.attributes."contact-emails" | Where-Object {$_.primary -eq $true}).value
+						$HTMLBody += "<li><u>$($Contact.attributes.Name)</u> ($($Contact.attributes.'contact-type-name')) (Location: $($Contact.attributes.'location-name')) (Email: $($PrimaryEmail)) (URL: $($Contact.attributes.'resource-url'))</li>"
+					}
+					$HTMLBody += '</ul><br />'
+				}
+
 				$EmailIntro = "Contact discrepancies were found at <strong>$OrgFullName</strong>. These will affect billing. Please review each and fix. A tabular summary is at the end of this email.
 							<br /><br />Please correct these issues before <strong>$DueDate</strong>, at that time billing will be updated based on the ITG contact list. 
 							Note that any issues you ignore now will not be reported on next month."							
@@ -1563,7 +1592,15 @@ if ($BillingUpdate) {
 	}
 	
 	# Get a fresh list of contacts from IT Glue
-	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
+	$FullContactList = @()
+	$i = 1
+	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
+		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		Write-Host "- Got contact set $i"
+		$TotalContacts = ($FullContactList | Measure-Object).Count
+		Write-Host "- Total: $TotalContacts"
+		$i++
+	}
 	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
 	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
 	Write-PSFMessage -Level Verbose -Message "Got $(($FullContactList | Measure-Object).Count) contacts from IT Glue."
@@ -1572,7 +1609,7 @@ if ($BillingUpdate) {
 	New-Item -ItemType Directory -Force -Path "C:\billing_history" | Out-Null
 	$Month = Get-Date -Format "MM"
 	$Year = Get-Date -Format "yyyy"
-	$historyContacts = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data | ConvertTo-Json
+	$historyContacts = $FullContactList | ConvertTo-Json
 	if (!$config) {
 		$historyPath = "C:\billing_history\contacts_$($Month)_$($Year).json"
 	} else {
