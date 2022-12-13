@@ -1541,6 +1541,14 @@ if ($UserAudit) {
 if ($BillingUpdate) {
 	Write-PSFMessage -Level Verbose -Message "Starting Billing Update."
 	If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
+
+	$Version = (Get-Module -ListAvailable -Name "ImportExcel").Version
+	if ($Version.Major -lt 7 -or $Version.Minor -lt 8 -or $Version.Build -lt 4) {
+		Remove-Module ImportExcel
+		Uninstall-Module ImportExcel
+		Install-Module -Name ImportExcel
+		Import-Module ImportExcel -Force
+	}
 	
 	# Get a fresh list of contacts from IT Glue
 	$FullContactList = (Get-ITGlueContacts -page_size 1000 -organization_id $OrgID).data
@@ -1826,7 +1834,7 @@ if ($BillingUpdate) {
 	Set-ExcelRange -Range "A3:C3" -Value "Totals" @xlParams
 
 	# totals table
-	Add-ExcelTable -PassThru -Range $ws.Cells["A4:C$($totalsTblLastRow)"] -TableName Totals -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
+	Add-ExcelTable -PassThru -Range $ws.Cells["A4:C$($totalsTblLastRow)"] -TableName Totals -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TableTotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
 	$totalsTblLastRow += 1
 	$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
 	Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
@@ -1862,7 +1870,7 @@ if ($BillingUpdate) {
 
 		$totalsTblLastRow = $totalsByLocFirstRow + ($TotalsByLoc | Measure-Object).Count
 		$excel = $TotalsByLoc | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $totalsByLocFirstRow
-		Add-ExcelTable -PassThru -Range $ws.Cells["A$($totalsByLocFirstRow):C$($totalsTblLastRow)"] -TableName TotalsByLoc -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
+		Add-ExcelTable -PassThru -Range $ws.Cells["A$($totalsByLocFirstRow):C$($totalsTblLastRow)"] -TableName TotalsByLoc -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TableTotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
 		$totalsTblLastRow += 1
 		$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
 		Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams

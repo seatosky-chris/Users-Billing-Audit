@@ -3562,7 +3562,7 @@ if ($ExportChoice -eq 'Yes') {
 	Set-ExcelRange -Range "A3:C3" -Value "Totals" @xlParams
 
 	# totals table
-	Add-ExcelTable -PassThru -Range $ws.Cells["A4:C$($totalsTblLastRow)"] -TableName Totals -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
+	Add-ExcelTable -PassThru -Range $ws.Cells["A4:C$($totalsTblLastRow)"] -TableName Totals -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TableTotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
 	$totalsTblLastRow += 1
 	$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
 	Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
@@ -3598,7 +3598,7 @@ if ($ExportChoice -eq 'Yes') {
 
 		$totalsTblLastRow = $totalsByLocFirstRow + ($TotalsByLoc | Measure-Object).Count
 		$excel = $TotalsByLoc | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -StartRow $totalsByLocFirstRow
-		Add-ExcelTable -PassThru -Range $ws.Cells["A$($totalsByLocFirstRow):C$($totalsTblLastRow)"] -TableName TotalsByLoc -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
+		Add-ExcelTable -PassThru -Range $ws.Cells["A$($totalsByLocFirstRow):C$($totalsTblLastRow)"] -TableName TotalsByLoc -TableStyle "Light21" -ShowFilter:$false -ShowTotal -ShowFirstColumn -TableTotalSettings @{"Billed" = "Sum"; "Unbilled" = "Sum"} | Out-Null
 		$totalsTblLastRow += 1
 		$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
 		Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
