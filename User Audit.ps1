@@ -955,7 +955,13 @@ if ($CheckAD) {
 		$FullADUsers | ForEach-Object {
 			$i++
 			$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
-			$_.Groups = @((Get-ADPrincipalGroupMembership $_.Username | Select-Object Name).Name)
+			$ADGroups = Get-ADPrincipalGroupMembership $_.Username
+			if ($ADGroups -and $EmailOnlyGroupsOUIgnore) {
+				foreach ($IgnoreOU in $EmailOnlyGroupsOUIgnore) {
+					$ADGroups = $ADGroups | Where-Object { $_.distinguishedName -notlike "OU=$($IgnoreOU)," }
+				}
+			}
+			$_.Groups = @(($ADGroups | Select-Object Name).Name)
 			[int]$PercentComplete = ($i / $ADUserCount * 100)
 			Write-Progress -Activity "Getting AD Group Memberships" -PercentComplete $PercentComplete -Status ("Working - " + $PercentComplete + "%")
 		}

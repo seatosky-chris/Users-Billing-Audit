@@ -438,7 +438,13 @@ if ($UserAudit) {
 			# Get groups
 			$FullADUsers | ForEach-Object {
 				$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
-				$_.Groups = @((Get-ADPrincipalGroupMembership $_.Username | Select-Object Name).Name)
+				$ADGroups = Get-ADPrincipalGroupMembership $_.Username
+				if ($ADGroups -and $EmailOnlyGroupsOUIgnore) {
+					foreach ($IgnoreOU in $EmailOnlyGroupsOUIgnore) {
+						$ADGroups = $ADGroups | Where-Object { $_.distinguishedName -notlike "OU=$($IgnoreOU)," }
+					}
+				}
+				$_.Groups = @(($ADGroups | Select-Object Name).Name)
 			}
 
 			if ($ADIncludeSubFolders) {

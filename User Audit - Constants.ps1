@@ -224,6 +224,19 @@ $EmailOnlyGroupsIgnore = @(
 )
 
 ####################
+# $EmailOnlyGroupsOUIgnore
+# 
+# Set this to any OU's in AD to ignore all of the groups in (including nested OUs) on email only accounts
+# This only takes effect if $EmailOnlyHaveAD is $true and the $EmailType is "O365"
+# When checking for Email Only accounts that have an AD account, the script assumes an AD account with no groups and an O365 account is email only,
+# if there are certain groups maintained in an OU that give access to mailing lists or online services, you can list the OUs here to have 
+# all groups in those OUs be ignored in this check 
+#
+$EmailOnlyGroupsOUIgnore = @(
+	"Distribution Groups"
+)
+
+####################
 # $InactivityO365Preference
 # 
 # When doing inactivity checks, the audit looks at both AD and the email system. It will flag each separately.
