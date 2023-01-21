@@ -35,6 +35,7 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 	If (Get-Module -ListAvailable -Name "MSAL.PS") {
 		Import-Module MSAL.PS
 	} else {
+		Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
 		Install-Module -Name MSAL.PS
 	}
 }
@@ -111,6 +112,15 @@ if ($Version.Major -lt 2 -or $Version.Minor -lt 1) {
 	Install-Module -Name ITGlueAPI
 	Import-Module ITGlueAPI -Force
 }
+
+$Version = (Get-Module -ListAvailable -Name "ImportExcel").Version
+if ($Version.Major -lt 7 -or $Version.Minor -lt 8 -or $Version.Build -lt 4) {
+	Remove-Module ImportExcel
+	Uninstall-Module ImportExcel
+	Install-Module -Name ImportExcel
+	Import-Module ImportExcel -Force
+}
+
 If (Get-Module -ListAvailable -Name "ImportExcel") {Import-module ImportExcel} Else { install-module ImportExcel -Force; import-module ImportExcel}
 
 # Settings IT-Glue logon information
@@ -267,23 +277,26 @@ if ($CheckEmail) {
 	# Connect to the mail service (it works better doing this first thing)
 	if ($EmailType -eq "O365") {
 		Write-Host "Connecting to Office 365..."
+		# If using a version under 3, upgrade
+		$Version = (Get-Module -ListAvailable -Name "ExchangeOnlineManagement").Version
+		if ($Version -and $Version.Count -gt 1) {
+			$Version = $Version | Sort-Object -Property Major -Descending | Select-Object -First 1
+		}
+		if ($Version -and $Version.Major -lt 3) {
+			Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
+			Update-Module -Name ExchangeOnlineManagement -Force
+		}
 		If (Get-Module -ListAvailable -Name "ExchangeOnlineManagement") {
 			Import-Module ExchangeOnlineManagement
 		} else {
 			Install-Module PowerShellGet -Force
-			Install-Module -Name ExchangeOnlineManagement
+			Install-Module -Name ExchangeOnlineManagement -Confirm:$false
 		}
+
 		if ($O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
 			Connect-ExchangeOnline -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -AppID $O365UnattendedLogin.AppID -Organization $O365UnattendedLogin.Organization -ShowProgress $true -ShowBanner:$false
 		} else {
 			Connect-ExchangeOnline -UserPrincipalName $O365LoginUser -ShowProgress $true -ShowBanner:$false
-		}
-
-		# If using a version under 1.0.1, upgrade
-		$Version = (Get-Module ExchangeOnlineManagement).Version
-		if ($Version.Major -lt 1 -or $Version.Built -lt 1) {
-			Update-Module -Name ExchangeOnlineManagement
-			Import-Module ExchangeOnlineManagement -Force
 		}
 	} else {
 		If (Get-Module -ListAvailable -Name "CredentialManager") {
