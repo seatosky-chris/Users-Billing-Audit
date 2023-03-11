@@ -1067,7 +1067,7 @@ if ($UserAudit) {
 			}
 
 			# Get user usage info from Device Audit DB if configured to look for part time employees
-			if ($PartTimeEmployeesByUsage -and $PartTimeEmployeesByUsage -and $ExistingUsers) {
+			if ($PartTimeEmployeesByUsage -and $ExistingUsers) {
 				$body = @{
 					'tokenType' = 'userusage'
 				}
@@ -1179,6 +1179,21 @@ if ($UserAudit) {
 						if (($EmployeeGroups | Measure-Object).Count -eq 0) {
 							$EmailOnly = $true
 						}
+						
+						# If this looks like an email only user, get the related items for this user from ITG to see if they have a computer assigned
+						if ($EmailOnly) {
+							$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+							if ($ITGUserDetails.included) {
+								$Existing_RelatedItems = $ITGUserDetails.included
+							}
+							if ($Existing_RelatedItems) {
+								$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
+
+								if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
+									$EmailOnly = $false
+								}
+							}
+						}
 					}
 
 					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and 'ToTerminated' -notin $IgnoreWarnings) {
@@ -1216,6 +1231,16 @@ if ($UserAudit) {
 						#ToEmailOnly
 						$WarnObj.type = "ToEmailOnly"
 						$WarnObj.reason = "AD account has no groups but an email account is setup. Consider changing the IT Glue Contact type to 'Employee - Email Only'."
+					} elseif ($ContactType -like "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+								$ContactType -notlike "Contractor" -and !$EmailOnly -and 'ToEmployee' -notin $IgnoreWarnings) {
+						#ToEmployee
+						$WarnObj.type = "ToEmployee"
+						$WarnObj.reason = "AD account appears to be a full employee but is currently set to email only. Consider changing the IT Glue Contact type to 'Employee'."
+					} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+								$ContactType -notlike "Contractor" -and !$EmailOnly -and !$PartTimeUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
+						#ToEmployee
+						$WarnObj.type = "ToEmployee"
+						$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
 					} elseif (!$ContactType) {
 						#NoContactType
 						$WarnObj.type = "NoContactType"
@@ -1273,6 +1298,20 @@ if ($UserAudit) {
 					}
 					if (($EmployeeGroups | Measure-Object).Count -eq 0) {
 						$EmailOnly = $true
+					}
+
+					if ($EmailOnly) {
+						$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+						if ($ITGUserDetails.included) {
+							$Existing_RelatedItems = $ITGUserDetails.included
+						}
+						if ($Existing_RelatedItems) {
+							$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
+
+							if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
+								$EmailOnly = $false
+							}
+						}
 					}
 				}
 
@@ -1338,6 +1377,11 @@ if ($UserAudit) {
 					$WarnObj.type = "ToEmployeePartTime"
 					$WarnObj.reason = "$EmailType account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
 					if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
+				} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+							$ContactType -notlike "Contractor" -and !$PartTimeUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
+					#ToEmployee
+					$WarnObj.type = "ToEmployee"
+					$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
 				} elseif (!$ContactType -and !$HasAD) {
 					#NoContactType
 					$WarnObj.type = "NoContactType"
