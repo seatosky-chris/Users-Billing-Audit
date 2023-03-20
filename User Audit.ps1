@@ -1,3 +1,23 @@
+###
+# File: \User Audit.ps1
+# Project: Users Billing Audit
+# Created Date: Tuesday, August 2nd 2022, 10:36:05 am
+# Author: Chris Jantzen
+# -----
+# Last Modified: Mon Mar 20 2023
+# Modified By: Chris Jantzen
+# -----
+# Copyright (c) 2023 Sea to Sky Network Solutions
+# License: MIT License
+# -----
+# 
+# HISTORY:
+# Date      	By	Comments
+# ----------	---	----------------------------------------------------------
+# 2023-03-10	CJ	Modified user audit to check assigned computers (in ITG, from Device Audit) in email-only user check.
+# 2023-03-20	CJ	Added proper support for email-only audits. If email-only, the script will now investigate a users O365 licenses and any assigned devices in O365 to determine if they are email only or a full employee.
+###
+
 #Requires -RunAsAdministrator
 param($config = $false)
 Set-ExecutionPolicy Unrestricted
@@ -2793,7 +2813,7 @@ if ($FullMatches) {
 			if (!$O365Match) { 
 				# If no O365 account or AD account:
 				# ToTerminated
-				if (!$HasAD -and $CheckAD -and $ContactType -ne 'Terminated') {
+				if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated') {
 					$WarnObj = @{
 						id = $MatchID
 						category = 'None'
@@ -2821,18 +2841,34 @@ if ($FullMatches) {
 				if (($EmployeeGroups | Measure-Object).Count -eq 0) {
 					$EmailOnly = $true
 				}
+			}
 
-				if ($EmailOnly) {
-					$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
-					if ($ITGUserDetails.included) {
-						$Existing_RelatedItems = $ITGUserDetails.included
-					}
-					if ($Existing_RelatedItems) {
-						$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
+			# If not doing an AD check, lets use the O365 licenses and any devices assigned in O365 to device if this is an email only user
+			if (!$CheckAD -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and ($O365Match.AssignedLicenses | Measure-Object).Count -gt 0) {
+				$O365Licenses_NotEmailOnly = $O365Match.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
 
-						if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
-							$EmailOnly = $false
+				if (($O365Licenses_NotEmailOnly | Measure-Object).Count -eq 0) {
+					$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.PrimarySmtpAddress
+					if (($O365Devices | Measure-Object).Count -eq 0) {
+						$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.PrimarySmtpAddress
+						if (($IntuneDevices | Measure-Object).Count -eq 0) {
+							$EmailOnly = $true
 						}
+					}
+				}
+			}
+
+			# If this user appears to be email only, verify against assigned devices in ITG (if they are assigned a device, then they are not email-only)
+			if ($EmailOnly) {
+				$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+				if ($ITGUserDetails.included) {
+					$Existing_RelatedItems = $ITGUserDetails.included
+				}
+				if ($Existing_RelatedItems) {
+					$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
+
+					if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
+						$EmailOnly = $false
 					}
 				}
 			}
@@ -2899,14 +2935,18 @@ if ($FullMatches) {
 				# ToSharedMailbox
 				$WarnObj.type = "ToSharedMailbox"
 				$WarnObj.reason = "$EmailType account appears to be a shared mailbox. Consider changing the IT Glue Contact type to 'Internal / Shared Mailbox'."
-			} elseif ($ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and $CheckAD -and (!$HasAD -or $EmailOnly) -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
-				# ToEmailOnly
+			} elseif ($CheckAD -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and (!$HasAD -or $EmailOnly) -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
+				# ToEmailOnly (with AD)
 				$WarnObj.type = "ToEmailOnly"
 				if ($EmailOnly) {
 					$WarnObj.reason = "$EmailType account has an associated AD account but it appears to be email-only. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
 				} else {	
 					$WarnObj.reason = "$EmailType account has no associated AD account. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
 				}
+			} elseif (!$CheckAD -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and $EmailOnly -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
+				# ToEmailOnly (without AD)
+				$WarnObj.type = "ToEmailOnly"
+				$WarnObj.reason = "$EmailType account appears to be email-only based on O365 licenses and assigned devices. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
 			} elseif ($ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
 						($O365Match.DisplayName -like "*part?time*" -or $O365Match.DisplayName -like "*casual*" -or
 						$O365Match.Title -like "*part?time*" -or $O365Match.Title -like "*casual*" -or $PartTimeUsage) -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {

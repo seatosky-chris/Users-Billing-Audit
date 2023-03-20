@@ -222,5 +222,18 @@ $O365LicenseTypes_Secondary = [ordered]@{
   STANDARDWOFFPACK_FACULTY = 'Office 365 Education E1 for Faculty'
 }
 
+####################
+# $O365LicenseTypes_EmailOnly
+# 
+# A list of 'email-only' office 365 license types
+# These are used for Office 365 only clients for checking if a user account is email only.
+#
+
+$O365LicenseTypes_EmailOnly = @(
+  "O365_BUSINESS_ESSENTIALS", "SMB_BUSINESS_ESSENTIALS", "STANDARDPACK", "STANDARDWOFFPACK", 
+  "EXCHANGESTANDARD", "EXCHANGEENTERPRISE", "EXCHANGEESSENTIALS", "EXCHANGE_S_ESSENTIALS",
+  "EXCHANGEDESKLESS", "EXCHANGETELCO", "ATP_ENTERPRISE"
+)
+
 # All licenses combined
 $O365LicenseTypes = $O365LicenseTypes_Primary + $O365LicenseTypes_Secondary
