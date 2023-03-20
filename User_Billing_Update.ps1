@@ -1,3 +1,22 @@
+###
+# File: \User_Billing_Update.ps1
+# Project: Users Billing Audit
+# Created Date: Tuesday, August 2nd 2022, 10:36:05 am
+# Author: Chris Jantzen
+# -----
+# Last Modified: Mon Mar 20 2023
+# Modified By: Chris Jantzen
+# -----
+# Copyright (c) 2023 Sea to Sky Network Solutions
+# License: MIT License
+# -----
+# 
+# HISTORY:
+# Date      	By	Comments
+# ----------	---	----------------------------------------------------------
+# 2023-03-20	CJ	Fixed bug where we weren't sending O365 unmatched info, and changed to send emails if there are unmatched accounts (AD or O365).
+###
+
 #Requires -RunAsAdministrator
 param (
 	$config = $false,
@@ -589,24 +608,26 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Matched: all IT Glue contacts to AD accounts. $ADMatchCount matches made."
 	}
 
-	# Get the existing unmatched AD list from the user audit	
-	if (!$config) {
-		$auditFilesPath = "C:\billing_audit\unmatchedAD.json"
-	} else {
-		$auditFilesPath = "C:\billing_audit\$($OrgShortName)\unmatchedAD.json"
-	}
-	$OldUnmatchedADUsernames = @()
-	if (Test-Path $auditFilesPath) {
-		$OldUnmatchedAD = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
-		if ($OldUnmatchedAD) {
-			$OldUnmatchedADUsernames = $OldUnmatchedAD.Username
+	if ($CheckAD) {
+		# Get the existing unmatched AD list from the user audit	
+		if (!$config) {
+			$auditFilesPath = "C:\billing_audit\unmatchedAD.json"
+		} else {
+			$auditFilesPath = "C:\billing_audit\$($OrgShortName)\unmatchedAD.json"
 		}
-	}
+		$OldUnmatchedADUsernames = @()
+		if (Test-Path $auditFilesPath) {
+			$OldUnmatchedAD = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+			if ($OldUnmatchedAD) {
+				$OldUnmatchedADUsernames = $OldUnmatchedAD.Username
+			}
+		}
 
-	$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" }
-	Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) unmatched AD accounts."
-	$UnmatchedAD = $UnmatchedAD | Where-Object { $_.Username -notin $OldUnmatchedADUsernames } # filter out accounts that have already been reviewed
-	Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) new unmatched AD accounts."
+		$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" }
+		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) unmatched AD accounts."
+		$UnmatchedAD = $UnmatchedAD | Where-Object { $_.Username -notin $OldUnmatchedADUsernames } # filter out accounts that have already been reviewed
+		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) new unmatched AD accounts."
+	}
 
 	if ($CheckEmail -and (($EmailType -eq "O365" -and $O365UnattendedLogin -and $O365UnattendedLogin.AppId) -or $EmailType -eq "Exchange")) {
 		Write-Host "Getting $EmailType Mailboxes. This may take a minute..." -ForegroundColor 'black' -BackgroundColor 'red'
@@ -682,11 +703,6 @@ if ($UserAudit) {
 					$_.FirstName = $AzureUser.GivenName
 					$_.LastName = $AzureUser.Surname
 					$_.Title = $AzureUser.JobTitle
-
-					if ($CheckInactivity) {
-						$O365MailboxStat = $O365MailboxStats | Where-Object { $_.DisplayName -like $Mailbox.DisplayName }
-						$_.LastUserActionTime = $O365MailboxStat.LastUserActionTime
-					}
 				}
 			}
 		} else {
@@ -898,7 +914,7 @@ if ($UserAudit) {
 			}
 		}
 
-		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 }
+		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 } | Where-Object { !$_.AccountDisabled }
 		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedO365 | Measure-Object).Count) unmatched mailboxes."
 		$UnmatchedO365 = $UnmatchedO365 | Where-Object { $_.PrimarySmtpAddress -notin $OldUnmatchedO365Emails } # filter out accounts that have already been reviewed
 		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedO365 | Measure-Object).Count) new unmatched mailboxes."
@@ -1457,40 +1473,42 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Audit complete. Issues found: $($WarnCount)"
 		$UserCleanupUpdateRan = $true
 
-		if ($WarnCount -gt 0) {
-			$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
-			$WarnContacts = [Collections.Generic.List[Object]]@($WarnContacts)
+		if ($WarnCount -gt 0 -or ($UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) -or ($UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0)) {
+			if ($WarnCount -gt 0) {
+				$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
+				$WarnContacts = [Collections.Generic.List[Object]]@($WarnContacts)
 
-			# See what inactive accounts we warned on in the past and remove the related warnings
-			if (!$config) {
-				$auditFilesPath = "C:\billing_audit\contact_warnings.json"
-			} else {
-				$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
-			}
-			$OldContactWarnings = @()
-			if (Test-Path $auditFilesPath) {
-				$OldContactWarnings = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
-			}
-
-			$OldContactWarnings | Where-Object { $_.type -eq "MaybeTerminate" } | ForEach-Object {
-				$NewIndex = $WarnContacts.FindIndex( { $args[0].id -eq $_.id -and $args[0].type -eq $_.type -and $args[0].category -eq $_.category } )
-				if ($NewIndex -ge 0) {
-					[void]$WarnContacts.RemoveAt($NewIndex)
+				# See what inactive accounts we warned on in the past and remove the related warnings
+				if (!$config) {
+					$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+				} else {
+					$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
 				}
+				$OldContactWarnings = @()
+				if (Test-Path $auditFilesPath) {
+					$OldContactWarnings = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
+				}
+
+				$OldContactWarnings | Where-Object { $_.type -eq "MaybeTerminate" } | ForEach-Object {
+					$NewIndex = $WarnContacts.FindIndex( { $args[0].id -eq $_.id -and $args[0].type -eq $_.type -and $args[0].category -eq $_.category } )
+					if ($NewIndex -ge 0) {
+						[void]$WarnContacts.RemoveAt($NewIndex)
+					}
+				}
+
+				# Export a full list of what we just warned on and what we warned on in the past
+				$AllContactWarnings = @(($WarnContacts | ConvertTo-Json | ConvertFrom-Json)) + $OldContactWarnings
+				$ContactWarningsJson = $AllContactWarnings | ConvertTo-Json
+				if (!$config) {
+					$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+				} else {
+					$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
+				}
+				$ContactWarningsJson | Out-File -FilePath $auditFilesPath
+				Write-Host "Exported contact warnings to a json file."
 			}
 
-			# Export a full list of what we just warned on and what we warned on in the past
-			$AllContactWarnings = @(($WarnContacts | ConvertTo-Json | ConvertFrom-Json)) + $OldContactWarnings
-			$ContactWarningsJson = $AllContactWarnings | ConvertTo-Json
-			if (!$config) {
-				$auditFilesPath = "C:\billing_audit\contact_warnings.json"
-			} else {
-				$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
-			}
-			$ContactWarningsJson | Out-File -FilePath $auditFilesPath
-			Write-Host "Exported contact warnings to a json file."
-
-			if ($WarnContacts -and $EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
+			if ($EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
 				# Lets add info on any duplicate contacts (only if other warnings exist)
 				$UniqueContacts = $FullContactList.attributes."name" | Select-Object -Unique
 				$DuplicateContacts = @()
@@ -1507,74 +1525,76 @@ if ($UserAudit) {
 				$DueDate = $(get-date).AddDays(5).ToString("dddd, MMMM d")
 				$HTMLBody = ""
 
-				$WarnContacts | ForEach-Object {
-					$FullMatchID = $_.id
-					$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $FullMatchID }
+				if ($WarnContacts) {
+					$WarnContacts | ForEach-Object {
+						$FullMatchID = $_.id
+						$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $FullMatchID }
 
+						$HTMLBody += '
+									<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+										<strong>Contact:</strong> {0}<br />
+										<strong>Issue Type:</strong> {1} (from {2} check)<br />
+										<strong>Issue:</strong> {3}<br />
+										<strong>ITG Link:</strong> <a href="{4}">{4}</a>
+									</p><br />' -f $_.name, $_.type, $_.category, $_.reason, $Contact."resource-url"
+					}
+					# Now lets add a table to the end
+					$HTMLBody += "<br /><br />"
 					$HTMLBody += '
-								<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
-									<strong>Contact:</strong> {0}<br />
-									<strong>Issue Type:</strong> {1} (from {2} check)<br />
-									<strong>Issue:</strong> {3}<br />
-									<strong>ITG Link:</strong> <a href="{4}">{4}</a>
-								</p><br />' -f $_.name, $_.type, $_.category, $_.reason, $Contact."resource-url"
-				}
-				# Now lets add a table to the end
-				$HTMLBody += "<br /><br />"
-				$HTMLBody += '
-								<table class="desktop_only_table" cellpadding="0" cellspacing="0" style="border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: auto;">
-									<tbody>
-									<tr>
-										<th>Contact</th>
-										<th>Current Type</th>
-										<th>AD Username</th>
-										<th>O365 Email</th>
-										<th>Issue Type</th>
-										<th>From Check</th>
-										<th>Issue</th>
-										<th>ITG Link</th>
-									</tr>'
-				$WarnContacts | ForEach-Object {
-					$FullMatchID = $_.id
-					$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $FullMatchID }
-					$ContactID = $Contact.id
-					if ($CheckEmail) {
-						$O365Match = ($O365Matches | Where-Object { $_.ID -eq $ContactID }).o365
-					}
-					if ($CheckAD) {
-						$ADMatch = ($ADMatches | Where-Object { $_.ID -eq $ContactID }).ad
-					}
+									<table class="desktop_only_table" cellpadding="0" cellspacing="0" style="border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: auto;">
+										<tbody>
+										<tr>
+											<th>Contact</th>
+											<th>Current Type</th>
+											<th>AD Username</th>
+											<th>O365 Email</th>
+											<th>Issue Type</th>
+											<th>From Check</th>
+											<th>Issue</th>
+											<th>ITG Link</th>
+										</tr>'
+					$WarnContacts | ForEach-Object {
+						$FullMatchID = $_.id
+						$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $FullMatchID }
+						$ContactID = $Contact.id
+						if ($CheckEmail) {
+							$O365Match = ($O365Matches | Where-Object { $_.ID -eq $ContactID }).o365
+						}
+						if ($CheckAD) {
+							$ADMatch = ($ADMatches | Where-Object { $_.ID -eq $ContactID }).ad
+						}
 
-					$ADUsername = 'N/A'
-					$O365Email = 'N/A'
-					if ($CheckAD -and $ADMatch) {
-						$ADUsername = $ADMatch.Username
-					}
-					if ($CheckEmail -and $O365Match) {
-						$O365Email = $O365Match.PrimarySmtpAddress
-					}
+						$ADUsername = 'N/A'
+						$O365Email = 'N/A'
+						if ($CheckAD -and $ADMatch) {
+							$ADUsername = $ADMatch.Username
+						}
+						if ($CheckEmail -and $O365Match) {
+							$O365Email = $O365Match.PrimarySmtpAddress
+						}
 
+						$HTMLBody += '
+										<tr>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{0}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{1}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{2}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{3}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{4}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{5}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{6}</td>
+											<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;"><a href="{7}">{7}</a></td>
+										</tr>' -f $_.name, $Contact."contact-type-name", $ADUsername, $O365Email, $_.type, $_.category, $_.reason, $Contact."resource-url"
+					}
 					$HTMLBody += '
-									<tr>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{0}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{1}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{2}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{3}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{4}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{5}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;">{6}</td>
-										<td style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 5px; border: 1px solid #000000;"><a href="{7}">{7}</a></td>
-									</tr>' -f $_.name, $Contact."contact-type-name", $ADUsername, $O365Email, $_.type, $_.category, $_.reason, $Contact."resource-url"
+										</tbody>
+									</table>
+									<div class="mobile_table_fallback" style="display: none;">
+										Table version hidden. You can view a tabular version of the above data on a desktop.
+									</div><br />'
 				}
-				$HTMLBody += '
-									</tbody>
-								</table>
-								<div class="mobile_table_fallback" style="display: none;">
-									Table version hidden. You can view a tabular version of the above data on a desktop.
-								</div><br />'
 
 				# If there were unmatched AD accounts, lets output those as well
-				if (($UnmatchedAD | Measure-Object).Count -gt 0) {
+				if ($CheckAD -and $UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) {
 					$HTMLBody += '<br />
 							<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>Unmatched AD Accounts Found</strong></p>
 							<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
@@ -1585,6 +1605,22 @@ if ($UserAudit) {
 					'
 					foreach ($ADAccount in $UnmatchedAD) {
 						$HTMLBody += "<li><u>$($ADAccount.Name)</u> ($($ADAccount.EmailAddress)) (Last Logon: $($ADAccount.LastLogonDate)) ($($ADAccount.Description))</li>"
+					}
+					$HTMLBody += '</ul><br />'
+				}
+
+				# If there were unmatched O365 accounts, output those
+				if ($CheckEmail -and $UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0) {
+					$HTMLBody += '<br />
+							<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>Unmatched Email Accounts Found</strong></p>
+							<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								The following Email accounts do not appear to have an associated contact in ITG. Please review and add an ITG contact if necessary.
+								The next time this report runs these unmatched accounts will be ignored.
+							</p>
+							<ul>
+					'
+					foreach ($O365Account in $UnmatchedO365) {
+						$HTMLBody += "<li><u>$($O365Account.DisplayName)</u> ($($O365Account.PrimarySmtpAddress)) (Primary License: $($O365Account.PrimaryLicense))</li>"
 					}
 					$HTMLBody += '</ul><br />'
 				}
