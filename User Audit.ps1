@@ -3936,9 +3936,9 @@ if ($ExportChoice -eq 'Yes') {
 	Close-ExcelPackage $excel
 	Write-Host "Excel Report Exported." -ForegroundColor Green
 
-	# Give the option to upload to ITG. This will update the Service Agreement asset and attach the billing report (removing any old version from the same month).
+	# Give the option to upload to ITG. This will update the Customer Billing asset and attach the billing report (removing any old version from the same month).
 	$UpdateITGChoice = $false
-	$UpdateITGChoice = [System.Windows.MessageBox]::Show('Would you like to update the Service Agreement in IT Glue and upload a copy of the billing report?', 'Update IT Glue', 'YesNo')
+	$UpdateITGChoice = [System.Windows.MessageBox]::Show('Would you like to update the Customer Billing page in IT Glue and upload a copy of the billing report?', 'Update IT Glue', 'YesNo')
 
 	if ($UpdateITGChoice -eq 'Yes') {
 		# Get the info for the fields
