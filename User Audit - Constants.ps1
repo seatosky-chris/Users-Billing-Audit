@@ -220,7 +220,7 @@ $ADIncludeSubFolders = $true
 # if there are certain groups that give access to mailing lists or online services, you can list them here to have them be ignored in this check 
 #
 $EmailOnlyGroupsIgnore = @(
-	"Domain Users", "*Email*", "*Contacts*", "*Office365*", "*O365*"
+	"Domain Users", "All Users", "*Email*", "*Contacts*", "*Office365*", "*O365*"
 )
 
 ####################
