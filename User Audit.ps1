@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Mon Mar 20 2023
+# Last Modified: Fri Mar 24 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -14,8 +14,9 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
-# 2023-03-10	CJ	Modified user audit to check assigned computers (in ITG, from Device Audit) in email-only user check.
+# 2023-03-24	CJ	Fixed bugs in new email-only checks.
 # 2023-03-20	CJ	Added proper support for email-only audits. If email-only, the script will now investigate a users O365 licenses and any assigned devices in O365 to determine if they are email only or a full employee.
+# 2023-03-10	CJ	Modified user audit to check assigned computers (in ITG, from Device Audit) in email-only user check.
 ###
 
 #Requires -RunAsAdministrator
@@ -2708,6 +2709,7 @@ if ($FullMatches) {
 					# If this looks like an email only user, get the related items for this user from ITG to see if they have a computer assigned
 					if ($EmailOnly) {
 						$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+						$Existing_RelatedItems = $false
 						if ($ITGUserDetails.included) {
 							$Existing_RelatedItems = $ITGUserDetails.included
 						}
@@ -2779,7 +2781,7 @@ if ($FullMatches) {
 					$WarnObj.reason = "AD account appears to be a full employee but is currently set to email only. Consider changing the IT Glue Contact type to 'Employee'."
 				} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
 							$ContactType -notlike "Contractor" -and ($ADMatch.Description -notlike "*part?time*" -and $ADMatch.Description -notlike "*casual*" -and
-							$ADMatch.Title -notlike "*part?time*" -and $ADMatch.Title -notlike "*casual*" -and !$PartTimeUsage) -and !$EmailOnly -and 'ToEmployee' -notin $IgnoreWarnings) {
+							$ADMatch.Title -notlike "*part?time*" -and $ADMatch.Title -notlike "*casual*" -and !$PartTimeUsage) -and $PartTimeEmployeesByUsage -and !$EmailOnly -and 'ToEmployee' -notin $IgnoreWarnings) {
 					#ToEmployee
 					$WarnObj.type = "ToEmployee"
 					$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
@@ -2861,6 +2863,7 @@ if ($FullMatches) {
 			# If this user appears to be email only, verify against assigned devices in ITG (if they are assigned a device, then they are not email-only)
 			if ($EmailOnly) {
 				$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+				$Existing_RelatedItems = $false
 				if ($ITGUserDetails.included) {
 					$Existing_RelatedItems = $ITGUserDetails.included
 				}
@@ -2956,7 +2959,7 @@ if ($FullMatches) {
 				if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
 			} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
 						$ContactType -notlike "Contractor" -and ($O365Match.DisplayName -notlike "*part?time*" -and $O365Match.DisplayName -notlike "*casual*" -and
-						$O365Match.Title -notlike "*part?time*" -and $O365Match.Title -notlike "*casual*" -and !$PartTimeUsage) -and 'ToEmployee' -notin $IgnoreWarnings) {
+						$O365Match.Title -notlike "*part?time*" -and $O365Match.Title -notlike "*casual*" -and !$PartTimeUsage) -and $PartTimeEmployeesByUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
 				#ToEmployee
 				$WarnObj.type = "ToEmployee"
 				$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."

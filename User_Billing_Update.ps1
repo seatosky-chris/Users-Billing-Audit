@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Mon Mar 20 2023
+# Last Modified: Fri Mar 24 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -1199,6 +1199,7 @@ if ($UserAudit) {
 						# If this looks like an email only user, get the related items for this user from ITG to see if they have a computer assigned
 						if ($EmailOnly) {
 							$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+							$Existing_RelatedItems = $false
 							if ($ITGUserDetails.included) {
 								$Existing_RelatedItems = $ITGUserDetails.included
 							}
@@ -1247,13 +1248,13 @@ if ($UserAudit) {
 						#ToEmailOnly
 						$WarnObj.type = "ToEmailOnly"
 						$WarnObj.reason = "AD account has no groups but an email account is setup. Consider changing the IT Glue Contact type to 'Employee - Email Only'."
-					} elseif ($ContactType -like "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+					} elseif ($ContactType -like "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
 								$ContactType -notlike "Contractor" -and !$EmailOnly -and 'ToEmployee' -notin $IgnoreWarnings) {
 						#ToEmployee
 						$WarnObj.type = "ToEmployee"
 						$WarnObj.reason = "AD account appears to be a full employee but is currently set to email only. Consider changing the IT Glue Contact type to 'Employee'."
 					} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-								$ContactType -notlike "Contractor" -and !$EmailOnly -and !$PartTimeUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
+								$ContactType -notlike "Contractor" -and !$EmailOnly -and !$PartTimeUsage -and $PartTimeEmployeesByUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
 						#ToEmployee
 						$WarnObj.type = "ToEmployee"
 						$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
@@ -1335,6 +1336,7 @@ if ($UserAudit) {
 				# If this user appears to be email only, verify against assigned devices in ITG (if they are assigned a device, then they are not email-only)
 				if ($EmailOnly) {
 					$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
+					$Existing_RelatedItems = $false
 					if ($ITGUserDetails.included) {
 						$Existing_RelatedItems = $ITGUserDetails.included
 					}
@@ -1414,7 +1416,7 @@ if ($UserAudit) {
 					$WarnObj.reason = "$EmailType account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
 					if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
 				} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-							$ContactType -notlike "Contractor" -and !$PartTimeUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
+							$ContactType -notlike "Contractor" -and !$PartTimeUsage -and $PartTimeEmployeesByUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
 					#ToEmployee
 					$WarnObj.type = "ToEmployee"
 					$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
@@ -1473,41 +1475,41 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Audit complete. Issues found: $($WarnCount)"
 		$UserCleanupUpdateRan = $true
 
-		if ($WarnCount -gt 0 -or ($UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) -or ($UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0)) {
-			if ($WarnCount -gt 0) {
-				$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
-				$WarnContacts = [Collections.Generic.List[Object]]@($WarnContacts)
+		if ($WarnCount -gt 0) {
+			$WarnContacts = $WarnContacts | Sort-Object @{Expression={$_.type}}, @{Expression={$_.category}}, @{Expression={$_.name}}
+			$WarnContacts = [Collections.Generic.List[Object]]@($WarnContacts)
 
-				# See what inactive accounts we warned on in the past and remove the related warnings
-				if (!$config) {
-					$auditFilesPath = "C:\billing_audit\contact_warnings.json"
-				} else {
-					$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
-				}
-				$OldContactWarnings = @()
-				if (Test-Path $auditFilesPath) {
-					$OldContactWarnings = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
-				}
-
-				$OldContactWarnings | Where-Object { $_.type -eq "MaybeTerminate" } | ForEach-Object {
-					$NewIndex = $WarnContacts.FindIndex( { $args[0].id -eq $_.id -and $args[0].type -eq $_.type -and $args[0].category -eq $_.category } )
-					if ($NewIndex -ge 0) {
-						[void]$WarnContacts.RemoveAt($NewIndex)
-					}
-				}
-
-				# Export a full list of what we just warned on and what we warned on in the past
-				$AllContactWarnings = @(($WarnContacts | ConvertTo-Json | ConvertFrom-Json)) + $OldContactWarnings
-				$ContactWarningsJson = $AllContactWarnings | ConvertTo-Json
-				if (!$config) {
-					$auditFilesPath = "C:\billing_audit\contact_warnings.json"
-				} else {
-					$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
-				}
-				$ContactWarningsJson | Out-File -FilePath $auditFilesPath
-				Write-Host "Exported contact warnings to a json file."
+			# See what inactive accounts we warned on in the past and remove the related warnings
+			if (!$config) {
+				$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			} else {
+				$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
+			}
+			$OldContactWarnings = @()
+			if (Test-Path $auditFilesPath) {
+				$OldContactWarnings = Get-Content -Path $auditFilesPath -Raw | ConvertFrom-Json
 			}
 
+			$OldContactWarnings | Where-Object { $_.type -eq "MaybeTerminate" } | ForEach-Object {
+				$NewIndex = $WarnContacts.FindIndex( { $args[0].id -eq $_.id -and $args[0].type -eq $_.type -and $args[0].category -eq $_.category } )
+				if ($NewIndex -ge 0) {
+					[void]$WarnContacts.RemoveAt($NewIndex)
+				}
+			}
+
+			# Export a full list of what we just warned on and what we warned on in the past
+			$AllContactWarnings = @(($WarnContacts | ConvertTo-Json | ConvertFrom-Json)) + $OldContactWarnings
+			$ContactWarningsJson = $AllContactWarnings | ConvertTo-Json
+			if (!$config) {
+				$auditFilesPath = "C:\billing_audit\contact_warnings.json"
+			} else {
+				$auditFilesPath = "C:\billing_audit\$($OrgShortName)\contact_warnings.json"
+			}
+			$ContactWarningsJson | Out-File -FilePath $auditFilesPath
+			Write-Host "Exported contact warnings to a json file."
+		}
+
+		if ($WarnCount -gt 0 -or ($UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) -or ($UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0)) {
 			if ($EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
 				# Lets add info on any duplicate contacts (only if other warnings exist)
 				$UniqueContacts = $FullContactList.attributes."name" | Select-Object -Unique
