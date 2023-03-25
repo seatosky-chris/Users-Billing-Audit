@@ -15,6 +15,9 @@
 # The script looks through a users license and grabs the first one it sees that is in this list
 # The licenses are in order of preference, from top to bottom
 #
+# You can find more codes here: https://learn.microsoft.com/en-us/azure/active-directory/enterprise-users/licensing-service-plan-reference
+# Or here: https://scripting.up-in-the.cloud/licensing/list-of-o365-license-skuids-and-names.html
+#
 $O365LicenseTypes_Primary = [ordered]@{
 	SPE_E5 = "Microsoft 365 E5"
 	SPE_E3 = "Microsoft 365 E3"
@@ -232,7 +235,8 @@ $O365LicenseTypes_Secondary = [ordered]@{
 $O365LicenseTypes_EmailOnly = @(
   "O365_BUSINESS_ESSENTIALS", "SMB_BUSINESS_ESSENTIALS", "STANDARDPACK", "STANDARDWOFFPACK", 
   "EXCHANGESTANDARD", "EXCHANGEENTERPRISE", "EXCHANGEESSENTIALS", "EXCHANGE_S_ESSENTIALS",
-  "EXCHANGEDESKLESS", "EXCHANGETELCO", "ATP_ENTERPRISE"
+  "EXCHANGEDESKLESS", "EXCHANGETELCO",
+  "ATP_ENTERPRISE", "THREAT_INTELLIGENCE", "FLOW_FREE_FLOW_P2_VIRAL"
 )
 
 # All licenses combined
