@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Mar 24 2023
+# Last Modified: Mon Mar 27 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -14,6 +14,7 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
+# 2023-03-27	CJ	Fixed bugs in MS Graph Beta API call to get Azure Users (they changed it to not allow pulling more than 120 users at a time)
 # 2023-03-24	CJ	Fixed bugs in new email-only checks.
 # 2023-03-20	CJ	Added proper support for email-only audits. If email-only, the script will now investigate a users O365 licenses and any assigned devices in O365 to determine if they are email only or a full employee.
 # 2023-03-10	CJ	Modified user audit to check assigned computers (in ITG, from Device Audit) in email-only user check.
@@ -935,7 +936,7 @@ if ($CheckAD) {
 
 	if ($ADType -eq "Azure") {
 		## Azure
-		$ApiUrl = "https://graph.microsoft.com/beta/users?`$select=id,displayName,givenName,surname,userPrincipalName,accountEnabled,signInActivity,city,department,jobTitle,mail,mailNickname,userType,assignedLicenses&`$top=999"
+		$ApiUrl = "https://graph.microsoft.com/beta/users?`$select=id,displayName,givenName,surname,userPrincipalName,accountEnabled,signInActivity,city,department,jobTitle,mail,mailNickname,userType,assignedLicenses&`$top=120"
 		$FullADUsers = @()
 
 		while ($null -ne $ApiUrl) {
@@ -947,11 +948,12 @@ if ($CheckAD) {
 		}
 
 		if (!$FullADUsers) {
+			Write-Host "Could not connect to the MS Graph Beta API, falling back to the Get-AzureADUser command." -ForegroundColor Yellow
 			$FullADUsers = Get-AzureADUser -All $true
 		}
 
 		$FullADUsers = $FullADUsers | 
-							Select-Object -Property Id, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
+							Select-Object -Property @{Name="Id"; E={if ($_.Id) { $_.Id } else { $_.ObjectId }}}, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
 								@{Name="EmailAddress"; E={$_.mail}}, @{Name="Enabled"; E={$_.AccountEnabled}}, @{Name="Description"; E={""}}, SignInActivity,
 								City, Department, @{Name="Division"; E={""}}, @{Name="Title"; E={$_.JobTitle}}, MailNickname, UserType, AssignedLicenses
 		$FullADUsers = $FullADUsers | Where-Object  { $_.UserType -eq "Member" }
@@ -2038,8 +2040,9 @@ if ($CheckEmail) {
 		}
 
 		$LicensePlanList = Get-AzureADSubscribedSku
-		$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, GivenName, Surname, JobTitle
+		$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AssignedLicenses, GivenName, Surname, JobTitle
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AssignedLicenses -Value @()
+		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AAD_ObjectID -Value $null
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name PrimaryLicense -Value $null
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name FirstName -Value $null
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name LastName -Value $null
@@ -2113,6 +2116,7 @@ if ($CheckEmail) {
 
 
 				$AzureUser = $AzureUsers | Where-Object { $_.UserPrincipalName -eq $Mailbox.UserPrincipalName }
+				$_.AAD_ObjectID = $AzureUser.ObjectID
 				$_.FirstName = $AzureUser.GivenName
 				$_.LastName = $AzureUser.Surname
 				$_.Title = $AzureUser.JobTitle
@@ -2706,6 +2710,23 @@ if ($FullMatches) {
 						$EmailOnly = $true
 					}
 
+					# If it looks email-only from the AD groups, and this is O365, lets double check if there are any office actived devices or intune devices (if so, it's not email only)
+					if ($EmailType -eq "O365" -and $EmailOnly -eq $true -and ($O365Match.o365.AssignedLicenses | Measure-Object).Count -gt 0) {
+						$O365Licenses_NotEmailOnly = $O365Match.o365.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
+		
+						if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
+							$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.o365.AAD_ObjectID
+							if (($O365Devices | Measure-Object).Count -gt 0) {
+								$EmailOnly = $false
+							} else {
+								$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.o365.AAD_ObjectID
+								if (($IntuneDevices | Measure-Object).Count -gt 0) {
+									$EmailOnly = $false
+								}
+							}
+						}
+					}
+
 					# If this looks like an email only user, get the related items for this user from ITG to see if they have a computer assigned
 					if ($EmailOnly) {
 						$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
@@ -2846,15 +2867,30 @@ if ($FullMatches) {
 			}
 
 			# If not doing an AD check, lets use the O365 licenses and any devices assigned in O365 to device if this is an email only user
-			if (!$CheckAD -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and ($O365Match.AssignedLicenses | Measure-Object).Count -gt 0) {
+			if (!$CheckAD -and $EmailType -eq "O365" -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and ($O365Match.AssignedLicenses | Measure-Object).Count -gt 0) {
 				$O365Licenses_NotEmailOnly = $O365Match.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
 
 				if (($O365Licenses_NotEmailOnly | Measure-Object).Count -eq 0) {
-					$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.PrimarySmtpAddress
+					$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.AAD_ObjectID
 					if (($O365Devices | Measure-Object).Count -eq 0) {
-						$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.PrimarySmtpAddress
+						$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.AAD_ObjectID
 						if (($IntuneDevices | Measure-Object).Count -eq 0) {
 							$EmailOnly = $true
+						}
+					}
+				}
+			# If we did do an AD check and the user appears to be EmailOnly due to their AD groups, lets verify if they have any devices connected in O365 (if so, then they are not email-only)
+			} elseif ($CheckAD -and $EmailType -eq "O365" -and $EmailOnly -eq $true -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and ($O365Match.AssignedLicenses | Measure-Object).Count -gt 0) {
+				$O365Licenses_NotEmailOnly = $O365Match.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
+
+				if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
+					$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.AAD_ObjectID
+					if (($O365Devices | Measure-Object).Count -gt 0) {
+						$EmailOnly = $false
+					} else {
+						$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.AAD_ObjectID
+						if (($IntuneDevices | Measure-Object).Count -gt 0) {
+							$EmailOnly = $false
 						}
 					}
 				}
