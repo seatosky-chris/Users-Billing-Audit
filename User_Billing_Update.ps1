@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Mon Mar 27 2023
+# Last Modified: Tue Mar 28 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -1148,6 +1148,8 @@ if ($UserAudit) {
 			}
 
 			$PartTimeUsage = $false
+			$NoRecentUsage = $false
+			$UsageStats = $false
 			if ($PartTimeEmployeesByUsage) {
 				$UsageStats = $UserUsage | Where-Object { $_.User.ITG_ID -eq $MatchID }
 				if ($UsageStats) {
@@ -1158,7 +1160,16 @@ if ($UserAudit) {
 
 					if ($LastMonthUsage -and $LastMonthUsage -lt $PartTimePercentage -and $LastMonthUsage -gt 0 -and (!$TwoMonthsAgoUsage -or $TwoMonthsAgoUsage -lt $PartTimePercentage)) {
 						$PartTimeUsage = $true
+					} elseif ($LastMonthUsage -and $ContactType -like "*Part Time*" -and $LastMonthUsage -lt $PartTimePercentage) {
+						$PartTimeUsage = $true
+					} elseif (!$LastMonthUsage -and $TwoMonthsAgoUsage -and $TwoMonthsAgoUsage -lt $PartTimePercentage) {
+						$PartTimeUsage = $true
+					} elseif (!$LastMonthUsage -and !$TwoMonthsAgoUsage) {
+						$PartTimeUsage = $true
+						$NoRecentUsage = $true
 					}
+				} else {					
+					$NoRecentUsage = $true
 				}
 			}
 
@@ -1188,6 +1199,7 @@ if ($UserAudit) {
 
 					# If email only accounts might have an associated AD account, lets check if the groups make this look like an email only user
 					$EmailOnly = $false
+					$EmailOnlyDetails = ""
 					if ($EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.PSObject.Properties.Name -contains "Groups") {
 						$EmployeeGroups = @()
 						foreach ($Group in $ADMatch.Groups) {
@@ -1196,6 +1208,7 @@ if ($UserAudit) {
 							}
 						}
 						if (($EmployeeGroups | Measure-Object).Count -eq 0) {
+							$EmailOnlyDetails = "Not in any employee AD groups."
 							$EmailOnly = $true
 						}
 
@@ -1206,10 +1219,12 @@ if ($UserAudit) {
 							if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
 								$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.o365.AAD_ObjectID
 								if (($O365Devices | Measure-Object).Count -gt 0) {
+									$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
 									$EmailOnly = $false
 								} else {
 									$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.o365.AAD_ObjectID
 									if (($IntuneDevices | Measure-Object).Count -gt 0) {
+										$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
 										$EmailOnly = $false
 									}
 								}
@@ -1227,10 +1242,13 @@ if ($UserAudit) {
 								$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
 
 								if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
+									$EmailOnlyDetails = "Has the following devices assigned in ITG: " + ($AssignedDevices.name -join ", ")
 									$EmailOnly = $false
 								}
 							}
 						}
+					} elseif ($O365Match.o365.RecipientTypeDetails -notlike 'UserMailbox') {
+						$EmailOnlyDetails = "Mailbox is not a UserMailbox"
 					}
 
 					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and 'ToTerminated' -notin $IgnoreWarnings) {
@@ -1254,30 +1272,48 @@ if ($UserAudit) {
 							$WarnObj.reason += " (Last Login: Never)"
 						}
 						# If $InactivityO365Preference is $true, this gets skipped and will only be checked in the O365 section if the O365 account is inactive
+					} elseif ($NoRecentUsage -and (!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-60)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly)) -and 
+							$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+						# MaybeTerminate[NoRecentDeviceUsage]
+						$WarnObj.type = "MaybeTerminate[NoRecentDeviceUsage]"
+						$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review."
+						if (!$UsageStats) {
+							$WarnObj.reason += " (No device usage found ever)"
+						} else {
+							$LastUse = $UsageStats.DaysActive.History.PSObject.Properties.Name | Sort-Object -Descending | Select-Object -First 1
+							$WarnObj.reason += " (No device usage over the past 2 months, last used: $LastUse)"
+						}
 					} elseif ($ContactType -eq 'Terminated' -and 'ToEnabled' -notin $IgnoreWarnings) {
 						# ToEnabled
 						$WarnObj.type = "ToEnabled"
 						$WarnObj.reason = "AD Account Enabled. IT Glue Contact should not be 'Terminated'."
 					} elseif ($ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-								$PartTimeUsage -and !$EmailOnly -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
+								!$NoRecentUsage -and $PartTimeUsage -and !$EmailOnly -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
 						# ToEmployeePartTime
 						$WarnObj.type = "ToEmployeePartTime"
 						$WarnObj.reason = "AD account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
-						if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
+						$WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])"
 					} elseif ($ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Contractor" -and $ContactType -notlike "Vendor" -and $EmailOnly -and 'ToEmailOnly' -notin $IgnoreWarnings) {
 						#ToEmailOnly
 						$WarnObj.type = "ToEmailOnly"
 						$WarnObj.reason = "AD account has no groups but an email account is setup. Consider changing the IT Glue Contact type to 'Employee - Email Only'."
+						if ($EmailOnlyDetails) {
+							$WarnObj.reason += "(Reason: $EmailOnlyDetails)"
+						}
 					} elseif ($ContactType -like "Employee - Email Only" -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-								$ContactType -notlike "Contractor" -and !$EmailOnly -and 'ToEmployee' -notin $IgnoreWarnings) {
-						#ToEmployee
-						$WarnObj.type = "ToEmployee"
+								$ContactType -notlike "Contractor" -and !$EmailOnly -and $EmailOnlyDetails -notlike "Mailbox is not a UserMailbox" -and 'ToEmployee' -notin $IgnoreWarnings -and 'ToEmployee[FromEmailOnly]' -notin $IgnoreWarnings) {
+						#ToEmployee[FromEmailOnly]
+						$WarnObj.type = "ToEmployee[FromEmailOnly]"
 						$WarnObj.reason = "AD account appears to be a full employee but is currently set to email only. Consider changing the IT Glue Contact type to 'Employee'."
+						if ($EmailOnlyDetails) {
+							$WarnObj.reason += "(Reason: $EmailOnlyDetails)"
+						}
 					} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-								$ContactType -notlike "Contractor" -and !$EmailOnly -and !$PartTimeUsage -and $PartTimeEmployeesByUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
-						#ToEmployee
-						$WarnObj.type = "ToEmployee"
+								$ContactType -notlike "Contractor" -and !$EmailOnly -and !$PartTimeUsage -and !$NoRecentUsage -and $PartTimeEmployeesByUsage -and 'ToEmployee' -notin $IgnoreWarnings -and 'ToEmployee[FromPartTime]' -notin $IgnoreWarnings) {
+						#ToEmployee[FromPartTime]
+						$WarnObj.type = "ToEmployee[FromPartTime]"
 						$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
+						$WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])"
 					} elseif (!$ContactType) {
 						#NoContactType
 						$WarnObj.type = "NoContactType"
@@ -1326,6 +1362,7 @@ if ($UserAudit) {
 
 				# If email only accounts might have an associated AD account, lets check if the groups make this look like an email only user
 				$EmailOnly = $false
+				$EmailOnlyDetails = ""
 				if ($EmailOnlyHaveAD -and $HasAD -and $ADEnabled -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.ad.PSObject.Properties.Name -contains "Groups") {
 					$EmployeeGroups = @()
 					foreach ($Group in $ADMatch.ad.Groups) {
@@ -1334,8 +1371,11 @@ if ($UserAudit) {
 						}
 					}
 					if (($EmployeeGroups | Measure-Object).Count -eq 0) {
+						$EmailOnlyDetails = "Not in any employee AD groups."
 						$EmailOnly = $true
 					}
+				} elseif ($O365Match.RecipientTypeDetails -notlike 'UserMailbox') {
+					$EmailOnlyDetails = "Mailbox is not a UserMailbox"
 				}
 
 				# If not doing an AD check, lets use the O365 licenses and any devices assigned in O365 to device if this is an email only user
@@ -1347,6 +1387,7 @@ if ($UserAudit) {
 						if (($O365Devices | Measure-Object).Count -eq 0) {
 							$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.AAD_ObjectID
 							if (($IntuneDevices | Measure-Object).Count -eq 0) {
+								$EmailOnlyDetails = "No devices activated in O365 or assigned in InTune."
 								$EmailOnly = $true
 							}
 						}
@@ -1358,10 +1399,12 @@ if ($UserAudit) {
 					if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
 						$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.AAD_ObjectID
 						if (($O365Devices | Measure-Object).Count -gt 0) {
+							$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
 							$EmailOnly = $false
 						} else {
 							$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.AAD_ObjectID
 							if (($IntuneDevices | Measure-Object).Count -gt 0) {
+								$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
 								$EmailOnly = $false
 							}
 						}
@@ -1379,6 +1422,7 @@ if ($UserAudit) {
 						$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
 
 						if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
+							$EmailOnlyDetails = "Has the following devices assigned in ITG: " + ($AssignedDevices.name -join ", ")
 							$EmailOnly = $false
 						}
 					}
@@ -1437,6 +1481,9 @@ if ($UserAudit) {
 					$WarnObj.type = "ToEmailOnly"
 					if ($EmailOnly) {
 						$WarnObj.reason = "$EmailType account has an associated AD account but it appears to be email-only. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
+						if ($EmailOnlyDetails) {
+							$WarnObj.reason += "(Reason: $EmailOnlyDetails)"
+						}
 					} else {	
 						$WarnObj.reason = "$EmailType account has no associated AD account. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
 					}
@@ -1444,16 +1491,19 @@ if ($UserAudit) {
 					# ToEmailOnly (without AD)
 					$WarnObj.type = "ToEmailOnly"
 					$WarnObj.reason = "$EmailType account appears to be email-only based on O365 licenses and assigned devices. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
-				} elseif ($ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-							$PartTimeUsage -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
+					if ($EmailOnlyDetails) {
+						$WarnObj.reason += "(Reason: $EmailOnlyDetails)"
+					}
+				} elseif (!$CheckAD -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+							!$NoRecentUsage -and $PartTimeUsage -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
 					# ToEmployeePartTime
 					$WarnObj.type = "ToEmployeePartTime"
 					$WarnObj.reason = "$EmailType account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
-					if ($PartTimeUsage) { $WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])" }
-				} elseif ($ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
+					$WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])"
+				} elseif (!$CheckAD -and $ContactType -like "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
 							$ContactType -notlike "Contractor" -and !$PartTimeUsage -and $PartTimeEmployeesByUsage -and 'ToEmployee' -notin $IgnoreWarnings) {
-					#ToEmployee
-					$WarnObj.type = "ToEmployee"
+					#ToEmployee[FromPartTime]
+					$WarnObj.type = "ToEmployee[FromPartTime]"
 					$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
 				} elseif (!$ContactType -and !$HasAD) {
 					#NoContactType
@@ -1463,7 +1513,7 @@ if ($UserAudit) {
 
 				if ($WarnObj.type) {
 					$Existing = $WarnContacts | Where-Object { $_.id -eq $MatchID }
-					if (!$Existing -or ($Existing -and $Existing.type -notlike $WarnObj.type)) {
+					if (!$Existing -or ($Existing -and ($Existing.type -replace "\[|\]", "") -notlike ($WarnObj.type -replace "\[|\]", ""))) {
 						if ($Existing -and ($WarnObj.type -eq 'MaybeTerminate' -or $WarnObj.type -eq 'ToTerminated')) {
 							if ($WarnObj.type -eq 'ToTerminated' -and $Existing.type -eq 'MaybeTerminate') {
 								$WarnContacts = [System.Collections.ArrayList] ($WarnContacts | Where-Object { $_.id -ne $MatchID })
