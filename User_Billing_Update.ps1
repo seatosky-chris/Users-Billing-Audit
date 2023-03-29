@@ -1242,7 +1242,7 @@ if ($UserAudit) {
 								$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
 
 								if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
-									$EmailOnlyDetails = "Has the following devices assigned in ITG: " + ($AssignedDevices.name -join ", ")
+									$EmailOnlyDetails = "Has the following devices assigned in ITG: " + ($AssignedDevices.attributes.name -join ", ")
 									$EmailOnly = $false
 								}
 							}
@@ -1373,6 +1373,8 @@ if ($UserAudit) {
 					if (($EmployeeGroups | Measure-Object).Count -eq 0) {
 						$EmailOnlyDetails = "Not in any employee AD groups."
 						$EmailOnly = $true
+					} else {
+						$EmailOnlyDetails = "In the Employee AD groups: " + ($EmployeeGroups -join ", ")
 					}
 				} elseif ($O365Match.RecipientTypeDetails -notlike 'UserMailbox') {
 					$EmailOnlyDetails = "Mailbox is not a UserMailbox"
@@ -1422,7 +1424,7 @@ if ($UserAudit) {
 						$AssignedDevices = $Existing_RelatedItems | Where-Object { $_.attributes.'asset-type' -eq 'configuration' -and $_.attributes.notes -like "*User*" -and !$_.attributes.archived }
 
 						if ($AssignedDevices -and ($AssignedDevices | Measure-Object).count -gt 0) {
-							$EmailOnlyDetails = "Has the following devices assigned in ITG: " + ($AssignedDevices.name -join ", ")
+							$EmailOnlyDetails = "Has the following devices assigned in ITG: " + ($AssignedDevices.attributes.name -join ", ")
 							$EmailOnly = $false
 						}
 					}
