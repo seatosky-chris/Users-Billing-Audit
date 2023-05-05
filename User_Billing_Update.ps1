@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Tue Mar 28 2023
+# Last Modified: Fri May 05 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -1596,6 +1596,7 @@ if ($UserAudit) {
 			Write-Host "Exported contact warnings to a json file."
 		}
 
+		$WarnCount = ($WarnContacts | Measure-Object).Count
 		if ($WarnCount -gt 0 -or ($UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) -or ($UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0)) {
 			if ($EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
 				# Lets add info on any duplicate contacts (only if other warnings exist)
