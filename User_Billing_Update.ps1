@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri May 05 2023
+# Last Modified: Fri Jun 23 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2554,148 +2554,148 @@ if ($BillingUpdate) {
 
 	Write-Host "Billing Update Complete!" -ForegroundColor Black -BackgroundColor Green
 	Write-PSFMessage -Level Verbose -Message "Billing Update Complete."
+}
 
-	#  Export an Office 365 license report
-	if ($CheckEmail -and $EmailType -eq "O365") {
-		Write-Host "Exporting Office 365 license report..."
-		Write-PSFMessage -Level Verbose -Message "Exporting Office 365 License Report."
-		$LicensePlanList = Get-AzureADSubscribedSku
-		$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
-	
-		$LicenseList = @()
-		$AzureUsers | ForEach-Object {
-			$LicenseSkus = $_.AssignedLicenses | Select-Object SkuId
-			$Licenses = @()
-			$LicenseSkus | ForEach-Object {
-				$sku = $_.SkuId
-				foreach ($license in $licensePlanList) {
-					if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
-						$Licenses += $license.SkuPartNumber
-						break
-					}
-				}
-			}
-	
-			$UserInfo = [pscustomobject]@{
-				Name = $_.DisplayName
-				Email = $_.UserPrincipalName
-				PrimaryLicense = ""
-				AssignedLicenses = $Licenses | ForEach-Object { if ($_ -in $O365LicenseTypes.Keys) { $O365LicenseTypes[$_] } else { $_ }  }
-			}
-	
-			foreach ($LicenseSku in $O365LicenseTypes.Keys) {
-				if ($LicenseSku -in $Licenses) {
-					$UserInfo.PrimaryLicense = $O365LicenseTypes[$LicenseSku]
+#  Export an Office 365 license report
+if ($CheckEmail -and $EmailType -eq "O365") {
+	Write-Host "Exporting Office 365 license report..."
+	Write-PSFMessage -Level Verbose -Message "Exporting Office 365 License Report."
+	$LicensePlanList = Get-AzureADSubscribedSku
+	$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
+
+	$LicenseList = @()
+	$AzureUsers | ForEach-Object {
+		$LicenseSkus = $_.AssignedLicenses | Select-Object SkuId
+		$Licenses = @()
+		$LicenseSkus | ForEach-Object {
+			$sku = $_.SkuId
+			foreach ($license in $licensePlanList) {
+				if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
+					$Licenses += $license.SkuPartNumber
 					break
 				}
 			}
-	
-			$LicenseList += $UserInfo
 		}
 
-		# Create a custom overview document (or update it)
-		$LicenseList_FlexAssetBody =
-		@{
-			type       = 'flexible-assets'
-			attributes = @{
-				traits = @{
-					'name' = "Office 365 License Overview"
-					'overview' = ""
-				}
+		$UserInfo = [pscustomobject]@{
+			Name = $_.DisplayName
+			Email = $_.UserPrincipalName
+			PrimaryLicense = ""
+			AssignedLicenses = $Licenses | ForEach-Object { if ($_ -in $O365LicenseTypes.Keys) { $O365LicenseTypes[$_] } else { $_ }  }
+		}
+
+		foreach ($LicenseSku in $O365LicenseTypes.Keys) {
+			if ($LicenseSku -in $Licenses) {
+				$UserInfo.PrimaryLicense = $O365LicenseTypes[$LicenseSku]
+				break
 			}
 		}
 
-		$LicenseListHTML = ($LicenseList | Where-Object { $_.PrimaryLicense } | Select-Object -Property Name, Email, PrimaryLicense -First 600 | convertto-html -Fragment | Out-String)
-		if (($LicenseList | Where-Object { $_.PrimaryLicense } | Measure-Object).Count -gt 600) {
-			$LicenseList_FlexAssetBody.attributes.traits.overview = "<p>This list has been truncated due to its size. Please see the attached excel document for the full list.</p>"
-		} else {
-			$LicenseList_FlexAssetBody.attributes.traits.overview = "<p>This list only includes primary licenses. Please see the attached excel document for the full list.</p>"
+		$LicenseList += $UserInfo
+	}
+
+	# Create a custom overview document (or update it)
+	$LicenseList_FlexAssetBody =
+	@{
+		type       = 'flexible-assets'
+		attributes = @{
+			traits = @{
+				'name' = "Office 365 License Overview"
+				'overview' = ""
+			}
 		}
-		$LicenseList_FlexAssetBody.attributes.traits.overview += $LicenseListHTML
+	}
 
-		$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $CustomOverview_FlexAssetID -filter_organization_id $orgID -include attachments
-		$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
+	$LicenseListHTML = ($LicenseList | Where-Object { $_.PrimaryLicense } | Select-Object -Property Name, Email, PrimaryLicense -First 600 | convertto-html -Fragment | Out-String)
+	if (($LicenseList | Where-Object { $_.PrimaryLicense } | Measure-Object).Count -gt 600) {
+		$LicenseList_FlexAssetBody.attributes.traits.overview = "<p>This list has been truncated due to its size. Please see the attached excel document for the full list.</p>"
+	} else {
+		$LicenseList_FlexAssetBody.attributes.traits.overview = "<p>This list only includes primary licenses. Please see the attached excel document for the full list.</p>"
+	}
+	$LicenseList_FlexAssetBody.attributes.traits.overview += $LicenseListHTML
 
-		if (!$ExistingLicenseOverview.data) {
-			$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
-			$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
-			$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
-			Write-Host "Created a new O365 License Overview."
+	$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $CustomOverview_FlexAssetID -filter_organization_id $orgID -include attachments
+	$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
 
-			# relate to the billing overview page
-			if ($ExistingFlexAsset) {
-				$RelatedItems = @{
-					type = 'related_items'
-					attributes = @{
-						destination_id = $ExistingFlexAsset.data.id
-						destination_type = "Flexible Asset"
+	if (!$ExistingLicenseOverview.data) {
+		$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
+		$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
+		$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
+		Write-Host "Created a new O365 License Overview."
+
+		# relate to the billing overview page
+		if ($ExistingFlexAsset) {
+			$RelatedItems = @{
+				type = 'related_items'
+				attributes = @{
+					destination_id = $ExistingFlexAsset.data.id
+					destination_type = "Flexible Asset"
+				}
+			}
+			New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+		}
+
+		# and email Office 365 page too if it exists
+		$EmailFilterID = (Get-ITGlueFlexibleAssetTypes -filter_name "Email").data
+		$EmailOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $EmailFilterID.id -filter_organization_id $orgID
+		$EmailOverview.data = $EmailOverview.data | Where-Object { $_.attributes.name -eq "Office 365" }  | Select-Object -First 1
+		if ($EmailOverview) {
+			$RelatedItems = @{
+				type = 'related_items'
+				attributes = @{
+					destination_id = $EmailOverview.data.id
+					destination_type = "Flexible Asset"
+				}
+			}
+			New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+		}
+	} else {
+		Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
+		Write-Host "Updated the O365 License Overview."
+	}
+
+	# Create the excel document
+	$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int](Get-Date -Format MM))
+	$Year = Get-Date -Format yyyy
+	$FileName = "$($OrgShortName)--O365_License_Overview--$($MonthName)_$Year.xlsx"
+	New-Item -ItemType Directory -Force -Path ($PSScriptRoot + "\O365LicenseOverview") | Out-Null
+	$Path = $PSScriptRoot + "\O365LicenseOverview\$FileName"
+	Remove-Item $Path -ErrorAction SilentlyContinue
+
+	$LicenseList | Where-Object { $_.AssignedLicenses } | Select-Object -Property Name, Email, PrimaryLicense, @{Name="AssignedLicenses"; E={$_.AssignedLicenses -join ", "}} | Export-Excel $Path -AutoFilter -AutoSize -AutoNameRange -TableStyle "Medium2"
+	$ReportEncoded = [System.Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
+
+	# Attach the excel doc to the custom overview (delete first if necessary)
+	if ($ExistingLicenseOverview -and $ExistingLicenseOverview.data.id -and $ExistingLicenseOverview.included) {
+		$Attachments = $ExistingLicenseOverview.included | Where-Object {$_.type -eq 'attachments'}
+		if ($Attachments -and ($Attachments | Measure-Object).Count -gt 0 -and $Attachments.attributes) {
+			$MonthsAttachment = $Attachments.attributes | Where-Object { $_.name -like $FileName + '*' -or $_."attachment-file-name" -like $FileName + '*' }
+			if ($MonthsAttachment) {
+				$data = @{ 
+					'type' = 'attachments'
+					'attributes' = @{
+						'id' = $MonthsAttachment.id
 					}
 				}
-				New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+				Remove-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
 			}
-
-			# and email Office 365 page too if it exists
-			$EmailFilterID = (Get-ITGlueFlexibleAssetTypes -filter_name "Email").data
-			$EmailOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $EmailFilterID.id -filter_organization_id $orgID
-			$EmailOverview.data = $EmailOverview.data | Where-Object { $_.attributes.name -eq "Office 365" }  | Select-Object -First 1
-			if ($EmailOverview) {
-				$RelatedItems = @{
-					type = 'related_items'
-					attributes = @{
-						destination_id = $EmailOverview.data.id
-						destination_type = "Flexible Asset"
-					}
-				}
-				New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
-			}
-		} else {
-			Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
-			Write-Host "Updated the O365 License Overview."
 		}
+	}
 
-		# Create the excel document
-		$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int](Get-Date -Format MM))
-		$Year = Get-Date -Format yyyy
-		$FileName = "$($OrgShortName)--O365_License_Overview--$($MonthName)_$Year.xlsx"
-		New-Item -ItemType Directory -Force -Path ($PSScriptRoot + "\O365LicenseOverview") | Out-Null
-		$Path = $PSScriptRoot + "\O365LicenseOverview\$FileName"
-		Remove-Item $Path -ErrorAction SilentlyContinue
-
-		$LicenseList | Where-Object { $_.AssignedLicenses } | Select-Object -Property Name, Email, PrimaryLicense, @{Name="AssignedLicenses"; E={$_.AssignedLicenses -join ", "}} | Export-Excel $Path -AutoFilter -AutoSize -AutoNameRange -TableStyle "Medium2"
-		$ReportEncoded = [System.Convert]::ToBase64String([IO.File]::ReadAllBytes($Path))
-
-		# Attach the excel doc to the custom overview (delete first if necessary)
-		if ($ExistingLicenseOverview -and $ExistingLicenseOverview.data.id -and $ExistingLicenseOverview.included) {
-			$Attachments = $ExistingLicenseOverview.included | Where-Object {$_.type -eq 'attachments'}
-			if ($Attachments -and ($Attachments | Measure-Object).Count -gt 0 -and $Attachments.attributes) {
-				$MonthsAttachment = $Attachments.attributes | Where-Object { $_.name -like $FileName + '*' -or $_."attachment-file-name" -like $FileName + '*' }
-				if ($MonthsAttachment) {
-					$data = @{ 
-						'type' = 'attachments'
-						'attributes' = @{
-							'id' = $MonthsAttachment.id
-						}
-					}
-					Remove-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
+	if ($ExistingLicenseOverview -and $ExistingLicenseOverview.data.id) {
+		$data = @{ 
+			'type' = 'attachments'
+			'attributes' = @{
+				'attachment' = @{
+					'content' = $ReportEncoded
+					'file_name'	= $FileName
 				}
 			}
 		}
-
-		if ($ExistingLicenseOverview -and $ExistingLicenseOverview.data.id) {
-			$data = @{ 
-				'type' = 'attachments'
-				'attributes' = @{
-					'attachment' = @{
-						'content' = $ReportEncoded
-						'file_name'	= $FileName
-					}
-				}
-			}
-			New-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
-			Write-Host "O365 license overview xls uploaded and attached." -ForegroundColor Green
-			Write-PSFMessage -Level Verbose -Message "Office 365 License Report Export Complete."
-			$UserO365ReportUpdated = $true
-		}
+		New-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
+		Write-Host "O365 license overview xls uploaded and attached." -ForegroundColor Green
+		Write-PSFMessage -Level Verbose -Message "Office 365 License Report Export Complete."
+		$UserO365ReportUpdated = $true
 	}
 }
 
