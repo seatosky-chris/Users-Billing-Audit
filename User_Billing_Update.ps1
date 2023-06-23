@@ -1462,7 +1462,7 @@ if ($UserAudit) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate"
 					$WarnObj.reason = "$EmailType Account is a Shared Mailbox and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
-				} elseif ($O365Match.DeliverToMailboxAndForward -eq $false -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and ($O365Match.ForwardingSmtpAddress -or $O365Match.ForwardingAddress) -and $ContactType -ne "Employee - On Leave" -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[Forwarding]' -notin $IgnoreWarnings) {
+				} elseif ($O365Match.DeliverToMailboxAndForward -eq $false -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and ($O365Match.ForwardingSmtpAddress -or $O365Match.ForwardingAddress) -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[Forwarding]' -notin $IgnoreWarnings) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate[Forwarding]"
 					$WarnObj.reason = "$EmailType Account has forwarding setup and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated', or if temporary, to 'Employee - On Leave'."
