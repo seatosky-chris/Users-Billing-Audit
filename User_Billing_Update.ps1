@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jun 23 2023
+# Last Modified: Fri Jul 21 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -14,6 +14,7 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
+# 2023-07-21	CJ	Modified customer billing page update to remove any old per-device billing info.
 # 2023-03-20	CJ	Fixed bug where we weren't sending O365 unmatched info, and changed to send emails if there are unmatched accounts (AD or O365).
 ###
 
@@ -2397,7 +2398,7 @@ if ($BillingUpdate) {
 
 		if ($ExistingFlexAsset -and $ExistingFlexAsset.data.attributes.traits) {
 			$ExistingFlexAsset.data.attributes.traits.PSObject.Properties | ForEach-Object {
-				if ($_.name -eq "billing-report-user-list") {
+				if ($_.name -eq "billing-report-user-list" -or $_.name -eq "billing-report-device-list") {
 					return
 				}
 				$property = $_.name
@@ -2406,8 +2407,12 @@ if ($BillingUpdate) {
 		}
 
 		# Add the new data to be uploaded
+		$FlexAssetBody.attributes.traits."billed-by" = "User"
 		$FlexAssetBody.attributes.traits."number-of-billed-users" = $TotalBilled
 		$FlexAssetBody.attributes.traits."user-breakdown" = $UserBreakdownTable
+		$FlexAssetBody.attributes.traits.Remove("number-of-billed-computers")
+		$FlexAssetBody.attributes.traits.Remove("number-of-billed-servers")
+		$FlexAssetBody.attributes.traits.Remove("device-breakdown")
 		$FlexAssetBody.attributes.traits."billing-report-user-list" = @{
 			content 	= $ReportEncoded
 			file_name 	= $FileName

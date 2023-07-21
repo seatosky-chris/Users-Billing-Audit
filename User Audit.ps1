@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Tue Mar 28 2023
+# Last Modified: Fri Jul 21 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -4127,8 +4127,12 @@ if ($ExportChoice -eq 'Yes') {
 			}
 
 			# Add the new data to be uploaded
+			$FlexAssetBody.attributes.traits."billed-by" = "User"
 			$FlexAssetBody.attributes.traits."number-of-billed-users" = $TotalBilled
 			$FlexAssetBody.attributes.traits."user-breakdown" = $UserBreakdownTable
+			$FlexAssetBody.attributes.traits.Remove("number-of-billed-computers")
+			$FlexAssetBody.attributes.traits.Remove("number-of-billed-servers")
+			$FlexAssetBody.attributes.traits.Remove("device-breakdown")
 			$FlexAssetBody.attributes.traits."billing-report-user-list" = @{
 				content 	= $ReportEncoded
 				file_name 	= $FileName
