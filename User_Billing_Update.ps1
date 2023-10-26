@@ -14,6 +14,7 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
+# 2023-10-26	CJ	Added and option to ignore duplicate contact warnings: # Ignore Duplicate Warnings
 # 2023-07-21	CJ	Modified customer billing page update to remove any old per-device billing info.
 # 2023-03-20	CJ	Fixed bug where we weren't sending O365 unmatched info, and changed to send emails if there are unmatched accounts (AD or O365).
 ###
@@ -1609,10 +1610,20 @@ if ($UserAudit) {
 					$DuplicateContacts = Compare-Object -ReferenceObject $UniqueContacts -DifferenceObject $FullContactList.attributes."name"
 				}
 				$DuplicateIDs = @()
+				$DuplicateITGContacts = @()
 
 				foreach ($Contact in $DuplicateContacts.InputObject) {
-					$DuplicateIDs += ($FullContactList | Where-Object { $_.attributes.name -like $Contact }).id
+					$DuplicateITGContacts += ($FullContactList | Where-Object { $_.attributes.name -like $Contact })
 				}
+
+				$RemoveIgnoredDuplicates = @()
+				foreach ($Contact in $DuplicateITGContacts) {
+					if ($Contact.attributes.notes -like "*# Ignore Duplicate Warnings*") {
+						$RemoveIgnoredDuplicates += $Contact.attributes.name
+					}
+				}
+				$DuplicateITGContacts = $DuplicateITGContacts | Where-Object { $_.attributes.name -notin $RemoveIgnoredDuplicates }
+				$DuplicateIDs = $DuplicateITGContacts.id
 
 				# Create some html for an email based on the $WarnContacts
 				$DueDate = $(get-date).AddDays(5).ToString("dddd, MMMM d")
