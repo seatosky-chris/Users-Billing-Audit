@@ -8,8 +8,8 @@
 ###   - Module Dependencies: 
 ###     a. Install-Module -Name ITGlueAPI
 ###     b. Install-Module -Name ImportExcel
-###     c. Install-Module -Name AzureAD  # (If email is O365)
-###     d. Install-Module -Name ExchangeOnlineManagement  # (If email is O365)
+###     c. Install-Module -Name AzureAD # (If email is O365)
+###     d. Install-Module -Name ExchangeOnlineManagement # (If email is O365)
 ###   - Setup the below constants.
 ##################################################################################################################
 
@@ -31,7 +31,7 @@
 #
 # Example: "STS.f153-ea51-457d-a60b-e5b6e4"
 #
-$APIKEy =  ""
+$APIKEy =  "<ITG API KEY>"
 
 ####################
 # $APIEndpoint
@@ -41,7 +41,7 @@ $APIKEy =  ""
 #
 # Example: "https://itgforwarder.azurewebsites.net/api/AzGlueForwarder?code=DM5utp67MRnkNjbSwow3DGC6h4bPOCp1x==&ResourceURI="
 #
-$APIEndpoint = ""
+$APIEndpoint = "<ITG API URL>"
 
 ####################
 # $LastUpdatedUpdater_APIURL
@@ -51,7 +51,7 @@ $APIEndpoint = ""
 #
 # Example: "https://lastupdatedupdater.azurewebsites.net/api/LastUpdatedUpdater?code=xxxx=="
 #
-$LastUpdatedUpdater_APIURL = ""
+$LastUpdatedUpdater_APIURL = "<LastUpdatedUpdater API URL>"
 
 ####################
 # $Email_APIKey
@@ -61,7 +61,7 @@ $LastUpdatedUpdater_APIURL = ""
 #
 # Example: "STS.fbc853-ea51-457d-a60b-e6b6e4"
 #
-$Email_APIKey =  ""
+$Email_APIKey =  "<EmailForwarder API KEY>"
 
 ####################
 # $Email_APIEndpoint
@@ -71,7 +71,7 @@ $Email_APIKey =  ""
 #
 # Example: "https://automail.azurewebsites.net/api/MailForwarder?ResourceURI="
 #
-$Email_APIEndpoint = ""
+$Email_APIEndpoint = "<EmailForwarder API URL>"
 
 ####################
 # $Device_DB_APIKey
@@ -80,7 +80,7 @@ $Email_APIEndpoint = ""
 #
 # Example: "STS.4466731b-1437-4f38-85ad-28f628c9db76"
 #
-$Device_DB_APIKey =  ""
+$Device_DB_APIKey =  "<DeviceDB API KEY>"
 
 ####################
 # $Device_DB_APIEndpoint
@@ -90,7 +90,7 @@ $Device_DB_APIKey =  ""
 #
 # Example: "https://keybroker.azurewebsites.net/api/KeyBroker?code=DM5utp67MRnkNjbSwow3DGC6h4bPOCp1x==&ResourceURI="
 #
-$Device_DB_APIEndpoint = ""
+$Device_DB_APIEndpoint = "<DeviceDB API URL>"
 
 ####################
 # $orgID
@@ -100,7 +100,7 @@ $Device_DB_APIEndpoint = ""
 #
 # Example: "31359"
 #
-$orgID = ""
+$orgID = "<ITG Org ID>"
 
 ####################
 # $CheckAD
