@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jul 21 2023
+# Last Modified: Thu Oct 26 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -466,7 +466,7 @@ if ($UserAudit) {
 				$ADGroups = Get-ADPrincipalGroupMembership $_.Username
 				if ($ADGroups -and $EmailOnlyGroupsOUIgnore) {
 					foreach ($IgnoreOU in $EmailOnlyGroupsOUIgnore) {
-						$ADGroups = $ADGroups | Where-Object { $_.distinguishedName -notlike "OU=$($IgnoreOU)," }
+						$ADGroups = $ADGroups | Where-Object { $_.distinguishedName -notlike "*OU=$($IgnoreOU),*" }
 					}
 				}
 				$_.Groups = @(($ADGroups | Select-Object Name).Name)
@@ -1211,6 +1211,8 @@ if ($UserAudit) {
 						if (($EmployeeGroups | Measure-Object).Count -eq 0) {
 							$EmailOnlyDetails = "Not in any employee AD groups."
 							$EmailOnly = $true
+						} else {
+							$EmailOnlyDetails = "In the following AD groups: $($EmployeeGroups -join ", ")"
 						}
 
 						# If it looks email-only from the AD groups, and this is O365, lets double check if there are any office actived devices or intune devices (if so, it's not email only)
@@ -1475,7 +1477,7 @@ if ($UserAudit) {
 					# ToEnabled
 					$WarnObj.type = "ToEnabled"
 					$WarnObj.reason = "$EmailType Account Enabled. IT Glue Contact should not be 'Terminated'."
-				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
+				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -notlike "Shared Account" -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
 					# ToSharedMailbox
 					$WarnObj.type = "ToSharedMailbox"
 					$WarnObj.reason = "$EmailType account appears to be a shared mailbox. Consider changing the IT Glue Contact type to 'Internal / Shared Mailbox'."
