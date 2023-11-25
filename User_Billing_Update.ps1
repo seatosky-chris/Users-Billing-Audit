@@ -1865,7 +1865,7 @@ if ($BillingUpdate) {
 	}
 
 	if ($CheckChanges) {
-		$HistoryContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+		$HistoryContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null -ErrorAction Ignore
 		$HistoryContactList | ForEach-Object { $_.attributes.id = $_.id }
 		$HistoryContactList = $HistoryContactList.attributes
 		$HistoryChanges = Compare-Object $HistoryContactList $FullContactList.attributes -Property id, name, contact-type-name
