@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Oct 26 2023
+# Last Modified: Fri Nov 24 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -272,6 +272,7 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 	Write-Host "Successfully imported Azure related modules."
 }
 
+$TenantDetails = $false
 if ($CheckEmail) {
 	# Connect to the mail service (it works better doing this first thing)
 	if ($EmailType -eq "O365") {
@@ -298,6 +299,8 @@ if ($CheckEmail) {
 			Connect-ExchangeOnline -UserPrincipalName $O365LoginUser -ShowProgress $true -ShowBanner:$false
 		}
 		Write-PSFMessage -Level Verbose -Message "Imported O365 related modules."
+
+		$TenantDetails = Get-AzureADTenantDetail
 	} elseif ($EmailType -eq "Exchange") {
 		If (Get-Module -ListAvailable -Name "CredentialManager") {
 			Import-Module CredentialManager
@@ -2613,12 +2616,16 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 	}
 
 	# Create a custom overview document (or update it)
+	$TenantName = $OrgFullName
+	if ($TenantDetails -and $TenantDetails.DisplayName) {
+		$TenantName = $TenantDetails.DisplayName
+	}
 	$LicenseList_FlexAssetBody =
 	@{
 		type       = 'flexible-assets'
 		attributes = @{
 			traits = @{
-				'name' = "Office 365 License Overview"
+				'name' = "Office 365 License Overview - $($TenantName)"
 				'overview' = ""
 			}
 		}
@@ -2633,7 +2640,16 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 	$LicenseList_FlexAssetBody.attributes.traits.overview += $LicenseListHTML
 
 	$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $CustomOverview_FlexAssetID -filter_organization_id $orgID -include attachments
-	$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
+	if (($ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview - $($TenantName)" } | Measure-Object).Count -gt 0) {
+		$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview - $($TenantName)" }  | Select-Object -First 1
+	} elseif (($ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" } | Measure-Object).Count -gt 0) {
+		$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
+	} else {
+		$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview*" }  | Select-Object -First 1
+	}
+	if ($ExistingLicenseOverview.data -and $ExistingLicenseOverview.data.id) {
+		$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -include attachments
+	}
 
 	if (!$ExistingLicenseOverview.data) {
 		$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
@@ -2689,10 +2705,13 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 		if ($Attachments -and ($Attachments | Measure-Object).Count -gt 0 -and $Attachments.attributes) {
 			$MonthsAttachment = $Attachments.attributes | Where-Object { $_.name -like $FileName + '*' -or $_."attachment-file-name" -like $FileName + '*' }
 			if ($MonthsAttachment) {
-				$data = @{ 
-					'type' = 'attachments'
-					'attributes' = @{
-						'id' = $MonthsAttachment.id
+				$data = @()
+				foreach ($Attachment in @($MonthsAttachment)) {
+					$data += @{ 
+						'type' = 'attachments'
+						'attributes' = @{
+							'id' = $Attachment.id
+						}
 					}
 				}
 				Remove-ITGlueAttachments -resource_type 'flexible_assets' -resource_id $ExistingLicenseOverview.data.id -data $data | Out-Null
@@ -2781,3 +2800,4 @@ if ($EmailType -eq "O365") {
 
 Write-Host "Script Completed."
 Write-PSFMessage -Level Verbose -Message "Script Complete."
+Wait-PSFMessage
