@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Nov 24 2023
+# Last Modified: Thu Dec 28 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -1351,7 +1351,7 @@ if ($UserAudit) {
 				if (!$O365Match) { 
 					# If no O365 account or AD account:
 					# ToTerminated
-					if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated') {
+					if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated' -and 'ToTerminated' -notin $IgnoreWarnings) {
 						$WarnObj = @{
 							id = $MatchID
 							category = 'None'

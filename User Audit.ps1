@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Oct 26 2023
+# Last Modified: Thu Dec 28 2023
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2878,7 +2878,7 @@ if ($FullMatches) {
 			if (!$O365Match) { 
 				# If no O365 account or AD account:
 				# ToTerminated
-				if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated') {
+				if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated' -and 'ToTerminated' -notin $IgnoreWarnings) {
 					$WarnObj = @{
 						id = $MatchID
 						category = 'None'
@@ -3573,7 +3573,7 @@ if ($ExportChoice -eq 'Yes') {
 	$FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
 	$FullContactList | ForEach-Object { $_.attributes.id = $_.id }
 	if ($CheckChanges) {
-		$HistoryContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
+		$HistoryContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null -ErrorAction Ignore
 		$HistoryContactList | ForEach-Object { $_.attributes.id = $_.id }
 		$HistoryContactList = $HistoryContactList.attributes
 		$HistoryChanges = Compare-Object $HistoryContactList $FullContactList.attributes -Property id, name, contact-type-name
