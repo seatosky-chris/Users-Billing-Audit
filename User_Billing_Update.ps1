@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Dec 28 2023
+# Last Modified: Fri Jan 26 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -14,6 +14,7 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
+# 2024-01-26	CJ	Added an email alert for the Azure Unattended SSL cert expiring soon
 # 2023-10-26	CJ	Added and option to ignore duplicate contact warnings: # Ignore Duplicate Warnings
 # 2023-07-21	CJ	Modified customer billing page update to remove any old per-device billing info.
 # 2023-03-20	CJ	Fixed bug where we weren't sending O365 unmatched info, and changed to send emails if there are unmatched accounts (AD or O365).
@@ -157,9 +158,15 @@ Import-module CosmosDB
 Write-Host "Successfully imported required modules and configured the ITGlue API."
 Write-PSFMessage -Level Verbose -Message "Configured ITGlue module."
 
+$SendCertExpiringEmail = $false
 if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azure")) {
 	Write-Host "Connecting to Azure..."
 	$ClientCertificate = Get-Item "Cert:\LocalMachine\My\$($O365UnattendedLogin.CertificateThumbprint)"
+
+	# Check if this cert expires in the next month (if true, we'll send an email alerting on this later)
+	if ($ClientCertificate.NotAfter -le (Get-Date).AddDays(31)) {
+		$SendCertExpiringEmail = $true
+	}
 
 	# Create base64 hash of certificate
 	$CertificateBase64Hash = [System.Convert]::ToBase64String($ClientCertificate.GetCertHash())
@@ -380,6 +387,35 @@ $EmployeeContacts = $FullContactList.attributes | Where-Object {$_."contact-type
 $UserCleanupUpdateRan = $false
 $UserBillingUpdateRan = $false
 $UserO365ReportUpdated = $false
+
+# Send a warning email if there is an O365 unattended cert expiring within the next month
+if ($SendCertExpiringEmail) {
+	$EmailIntro = "The Azure SSL Certificate for unattended access to Office 365 and Azure at $OrgFullName will be expiring within the next month. Considering creating a new certificate and updating the UserAudit app in Azure to prevent issues."
+	$HTMLBody = "<p>Please considering creating a new certificate before then, otherwise the User Audit will not work after this certificate expires.</p>"
+	$HTMLBody += "<p>After creating a new certificate, be sure to update the SSL cert in the UserAudit app in Azure. Additionally, you will need to update the SSL thumbprint in the User Audit Constants file, and in any Office 365 or Azure related AutoDoc files.</p>"
+
+	$HTMLEmail = $EmailTemplate -f `
+					$EmailIntro, 
+					"The certificate will be expiring on: $($ClientCertificate.NotAfter)", 
+					$HTMLBody, 
+					""
+	$EmailSubject = "User Audit O365 Cert Expiring - $OrgFullName"
+
+	# Send email
+	$mailbody = @{
+		"From" = $EmailFrom
+		"To" = $EmailTo_Audit
+		"Subject" = $EmailSubject
+		"HTMLContent" = $HTMLEmail
+	} | ConvertTo-Json -Depth 6
+
+	$headers = @{
+		'x-api-key' = $Email_APIKey
+	}
+
+	Invoke-RestMethod -Method Post -Uri $Email_APIEndpoint -Body $mailbody -Headers $headers -ContentType application/json
+	Write-Host "Sent Email warning of impending O365 Unattended SSL Cert expiry." -ForegroundColor Green
+}
 
 
 ################
