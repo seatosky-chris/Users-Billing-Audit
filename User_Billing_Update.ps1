@@ -1165,6 +1165,37 @@ if ($UserAudit) {
 		$PartTimeEmployeesByUsage = $false
 	}
 
+	$DBComputers = $false
+	function Get-DeviceDBDevices() {
+
+		if (!$DBComputers) {
+			$headers = @{
+				'x-api-key' = $Device_DB_APIKey
+			}
+			$body = @{
+				'tokenType' = 'computers'
+			}
+			$Token3 = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
+
+			if ($Token3) {
+				$collectionId3 = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'Computers'
+				$contextToken3 = New-CosmosDbContextToken `
+					-Resource $collectionId3 `
+					-TimeStamp (Get-Date $Token3.Timestamp) `
+					-TokenExpiry $Token3.Life `
+					-Token (ConvertTo-SecureString -String $Token3.Token -AsPlainText -Force) 
+				$resourceContext3 = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken3
+			}
+
+			if ($resourceContext3) {
+				$Query3 = "SELECT * FROM Computers AS c"
+				$global:DBComputers = Get-CosmosDbDocument -Context $resourceContext3 -Database $DB_Name -CollectionId "Computers" -Query $Query3 -PartitionKey 'computer'
+			}
+		}
+
+		return $global:DBComputers;
+	}
+
 	#############################################
 	##### Matches Made. Find Discrepancies. #####
 	#############################################
@@ -1262,10 +1293,20 @@ if ($UserAudit) {
 							if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
 								$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.o365.AAD_ObjectID
 								if (($O365Devices | Measure-Object).Count -gt 0) {
+									# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
+									$Computers = Get-DeviceDBDevices
+									$O365Devices = $O365Devices | Where-Object { $_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*" }
+								}
+								if (($O365Devices | Measure-Object).Count -gt 0) {
 									$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
 									$EmailOnly = $false
 								} else {
 									$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.o365.AAD_ObjectID
+									if (($IntuneDevices | Measure-Object).Count -gt 0) {
+										# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
+										$Computers = Get-DeviceDBDevices
+										$IntuneDevices = $IntuneDevices | Where-Object { $_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*" }
+									}
 									if (($IntuneDevices | Measure-Object).Count -gt 0) {
 										$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
 										$EmailOnly = $false

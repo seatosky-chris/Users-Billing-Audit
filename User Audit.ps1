@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Dec 28 2023
+# Last Modified: Fri Jan 26 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -14,6 +14,7 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
+# 2024-01-26	CJ	Added filtering O365 and Intune devices by computers in the device DB to prevent personal devices from triggering an Email only to Employee suggestion
 # 2023-10-26	CJ	Fixed bug where the $EmailOnlyGroupsOUIgnore config setting wasn't working
 # 2023-03-27	CJ	Improvements to Part Time and Email Only alerts
 # 2023-03-27	CJ	Fixed bugs in MS Graph Beta API call to get Azure Users (they changed it to not allow pulling more than 120 users at a time)
@@ -2637,6 +2638,37 @@ if (!$UserUsage -or ($UserUsage | Measure-Object).Count -le 0) {
 	$PartTimeEmployeesByUsage = $false
 }
 
+$DBComputers = $false
+function Get-DeviceDBDevices() {
+
+	if (!$DBComputers) {
+		$headers = @{
+			'x-api-key' = $Device_DB_APIKey
+		}
+		$body = @{
+			'tokenType' = 'computers'
+		}
+		$Token3 = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
+
+		if ($Token3) {
+			$collectionId3 = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'Computers'
+			$contextToken3 = New-CosmosDbContextToken `
+				-Resource $collectionId3 `
+				-TimeStamp (Get-Date $Token3.Timestamp) `
+				-TokenExpiry $Token3.Life `
+				-Token (ConvertTo-SecureString -String $Token3.Token -AsPlainText -Force) 
+			$resourceContext3 = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken3
+		}
+
+		if ($resourceContext3) {
+			$Query3 = "SELECT * FROM Computers AS c"
+			$global:DBComputers = Get-CosmosDbDocument -Context $resourceContext3 -Database $DB_Name -CollectionId "Computers" -Query $Query3 -PartitionKey 'computer'
+		}
+	}
+
+	return $global:DBComputers;
+}
+
 
 #############################################
 ##### Matches Made. Find Discrepancies. #####
@@ -2734,10 +2766,20 @@ if ($FullMatches) {
 						if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
 							$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.o365.AAD_ObjectID
 							if (($O365Devices | Measure-Object).Count -gt 0) {
+								# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
+								$Computers = Get-DeviceDBDevices
+								$O365Devices = $O365Devices | Where-Object { $_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*" }
+							}
+							if (($O365Devices | Measure-Object).Count -gt 0) {
 								$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
 								$EmailOnly = $false
 							} else {
 								$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.o365.AAD_ObjectID
+								if (($IntuneDevices | Measure-Object).Count -gt 0) {
+									# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
+									$Computers = Get-DeviceDBDevices
+									$IntuneDevices = $IntuneDevices | Where-Object { $_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*" }
+								}
 								if (($IntuneDevices | Measure-Object).Count -gt 0) {
 									$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
 									$EmailOnly = $false
