@@ -2768,7 +2768,11 @@ if ($FullMatches) {
 							if (($O365Devices | Measure-Object).Count -gt 0) {
 								# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
 								$Computers = Get-DeviceDBDevices
-								$O365Devices = $O365Devices | Where-Object { $_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*" }
+								$O365Devices = $O365Devices | Where-Object { 
+									($_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*") -and
+									$Contact.notes -notlike "*# Ignore O365 Device: $($_.DisplayName.Trim())*" -and
+									$Contact.notes -notlike "*# Ignore InTune Device: $($_.DisplayName.Trim())*"
+								}
 							}
 							if (($O365Devices | Measure-Object).Count -gt 0) {
 								$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
@@ -2778,7 +2782,11 @@ if ($FullMatches) {
 								if (($IntuneDevices | Measure-Object).Count -gt 0) {
 									# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
 									$Computers = Get-DeviceDBDevices
-									$IntuneDevices = $IntuneDevices | Where-Object { $_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*" }
+									$IntuneDevices = $IntuneDevices | Where-Object { 
+										($_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*") -and
+										$Contact.notes -notlike "*# Ignore O365 Device: $($_.DisplayName.Trim())*" -and
+										$Contact.notes -notlike "*# Ignore InTune Device: $($_.DisplayName.Trim())*"
+									}
 								}
 								if (($IntuneDevices | Measure-Object).Count -gt 0) {
 									$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
