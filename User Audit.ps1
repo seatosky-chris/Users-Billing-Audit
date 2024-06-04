@@ -2099,23 +2099,18 @@ if ($CheckEmail) {
 				$Licenses = @()
 				$LicenseSkus | ForEach-Object {
 					$sku = $_.SkuId
-					foreach ($license in $licensePlanList) {
-						if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
-							$Licenses += $license.SkuPartNumber
-							break
-						}
-					}
+					$PrettyName = ($LicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
+					$Licenses += $PrettyName
 				}
 				$_.AssignedLicenses = $Licenses
 				$_.PrimaryLicense = "None"
 
-				foreach ($LicenseSku in $O365LicenseTypes.Keys) {
-					if ($LicenseSku -in $Licenses) {
-						$_.PrimaryLicense = $O365LicenseTypes[$LicenseSku]
+				foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
+					if ($PrimaryLicenseType.Value -in $Licenses) {
+						$_.PrimaryLicense = $PrimaryLicenseType.Value
 						break
 					}
 				}
-
 
 
 				$AzureUser = $AzureUsers | Where-Object { $_.UserPrincipalName -eq $Mailbox.UserPrincipalName }

@@ -727,6 +727,12 @@ if ($UserAudit) {
 				}
 			}
 
+			if (!$LicenseTranslationTable) {
+				New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+				Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
+				$LicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
+			}
+
 			$LicensePlanList = Get-AzureADSubscribedSku
 			$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AssignedLicenses, GivenName, Surname, JobTitle
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AssignedLicenses -Value @()
@@ -743,23 +749,18 @@ if ($UserAudit) {
 					$Licenses = @()
 					$LicenseSkus | ForEach-Object {
 						$sku = $_.SkuId
-						foreach ($license in $licensePlanList) {
-							if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
-								$Licenses += $license.SkuPartNumber
-								break
-							}
-						}
+						$PrettyName = ($LicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
+						$Licenses += $PrettyName
 					}
 					$_.AssignedLicenses = $Licenses
 					$_.PrimaryLicense = "None"
 
-					foreach ($LicenseSku in $O365LicenseTypes.Keys) {
-						if ($LicenseSku -in $Licenses) {
-							$_.PrimaryLicense = $O365LicenseTypes[$LicenseSku]
+					foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
+						if ($PrimaryLicenseType.Value -in $Licenses) {
+							$_.PrimaryLicense = $PrimaryLicenseType.Value
 							break
 						}
 					}
-
 
 
 					$AzureUser = $AzureUsers | Where-Object { $_.UserPrincipalName -eq $Mailbox.UserPrincipalName }
