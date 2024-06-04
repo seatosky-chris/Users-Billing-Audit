@@ -42,7 +42,7 @@ if (($Autotask_Locations | Measure-Object).Count -gt 1) {
 			$Continue = [System.Windows.MessageBox]::Show("You have selected $DeleteCount location(s) to disable. Are you sure you want to continue?", 'Continue removing locations?', 'YesNo')
 		
 			if ($Continue -eq "Yes") { 
-				Get-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Where-Object { $_.id -in $DeleteIDs } | ForEach-Object { $_.IsActive = "false"; $_.IsPrimary = "false"; $_ } | Set-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Out-Null
+				Get-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Where-Object { $_.id -in $DeleteIDs } | ForEach-Object { $_.IsActive = "false"; $_.IsPrimary = "false"; $_ } | Set-AutotaskAPIResource -Resource CompanyLocationsChild -ParentID $Autotask_CompanyID | Out-Null
 				$Autotask_Locations = Get-AutotaskAPIResource -Resource CompanyLocations -SimpleSearch "CompanyID eq $Autotask_CompanyID" | Where-Object { $_.isActive -eq "True" }
 				$Autotask_Locations | Add-Member -MemberType NoteProperty -Name country -value $null
 				$Autotask_Locations | ForEach-Object { $_.country = $Autotask_CountriesLookup[$_.countryID] }
@@ -58,14 +58,14 @@ if (($PrimaryLocation | Measure-Object).Count -eq 0) {
 	Write-Host "No locations are currently set as the Primary location. Attempting to fix..." -ForegroundColor Red
 
 	if (($Autotask_Locations | Measure-Object).Count -eq 1) {
-		Get-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Where-Object { $_.isActive -eq "True" } | Select-Object -First 1 | ForEach-Object { $_.IsPrimary = "True"; $_ } | Set-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Out-Null
+		Get-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Where-Object { $_.isActive -eq "True" } | Select-Object -First 1 | ForEach-Object { $_.IsPrimary = "True"; $_ } | Set-AutotaskAPIResource -Resource CompanyLocationsChild -ParentID $Autotask_CompanyID | Out-Null
 		Write-Host "Set the single remaining location as the Primary location."
 	} else {
 		[System.Windows.MessageBox]::Show('Multiple active locations exist. Please choose the Primary location.')
 		$PrimaryLocation = $Autotask_Locations | Select-Object id, name, isPrimary, address1, address2, city, postalCode, state, country, phone, alternatePhone1, alternatePhone2, fax, description | Out-GridView -PassThru -Title "Autotask Locations (Select the Primary Location.)"
 		$PrimaryLocation = ($PrimaryLocation | Select-Object -First 1).id
 
-		Get-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Where-Object { $_.id -eq $PrimaryLocation } | ForEach-Object { $_.IsPrimary = "True"; $_ } | Set-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Out-Null
+		Get-AutotaskAPIResource -Resource CompanyLocationsChild -ID $Autotask_CompanyID | Where-Object { $_.id -eq $PrimaryLocation } | ForEach-Object { $_.IsPrimary = "True"; $_ } | Set-AutotaskAPIResource -Resource CompanyLocationsChild -ParentID $Autotask_CompanyID | Out-Null
 		Write-Host "Set the chosen location as the Primary location."
 	}
 }
@@ -96,7 +96,7 @@ foreach ($Contact in $Autotask_Contacts) {
 						$_.CountryID = $LocationInfo.countryID; 
 						$_ 
 					} | 
-					Set-AutotaskAPIResource -Resource CompanyContactsChild -ID $Autotask_CompanyID | Out-Null
+					Set-AutotaskAPIResource -Resource CompanyContactsChild -ParentID $Autotask_CompanyID | Out-Null
 				$FixedCount++
 		}
 	} else {
@@ -106,7 +106,7 @@ foreach ($Contact in $Autotask_Contacts) {
 				$_.CompanyLocationID = $null; 
 				$_
 			} | 
-			Set-AutotaskAPIResource -Resource CompanyContactsChild -ID $Autotask_CompanyID | Out-Null
+			Set-AutotaskAPIResource -Resource CompanyContactsChild -ParentID $Autotask_CompanyID | Out-Null
 		$FixedCount++
 	}
 }
@@ -391,7 +391,7 @@ if (($ContactUniqueAddresses | Measure-Object).Count -gt 0) {
 		# Send the updates to Autotask
 		if ($UpdatedContacts) {
 			Write-Progress -Activity "Updating contact locations and addresses." -Status "Sending updates to Autotask." -PercentComplete (($i / $ContactCount) * 85)
-			$UpdatedContacts | Set-AutotaskAPIResource -Resource CompanyContactsChild -ID $Autotask_CompanyID | Out-Null
+			$UpdatedContacts | Set-AutotaskAPIResource -Resource CompanyContactsChild -ParentID $Autotask_CompanyID | Out-Null
 			Write-Progress -Activity "Updating contact locations and addresses." -Status "Complete!" -PercentComplete 100
 		}
 		Write-Host "All contacts have now been updated."
@@ -575,7 +575,7 @@ if ($DuplicateIDs) {
 			$renameBtn.enabled = $false
 
 			if (($SelectedIDs | Measure-Object).Count -gt 0) {
-				Get-AutotaskAPIResource -Resource CompanyContactsChild -ID $Autotask_CompanyID | Where-Object { $_.Id -in $SelectedIDs -and $_.lastName -notlike "* (Old)" } | ForEach-Object { $_.LastName = $_.LastName + " (Old)"; $_ } | Set-AutotaskAPIResource -Resource CompanyContactsChild -ID $Autotask_CompanyID | Out-Null
+				Get-AutotaskAPIResource -Resource CompanyContactsChild -ID $Autotask_CompanyID | Where-Object { $_.Id -in $SelectedIDs -and $_.lastName -notlike "* (Old)" } | ForEach-Object { $_.LastName = $_.LastName + " (Old)"; $_ } | Set-AutotaskAPIResource -Resource CompanyContactsChild -ParentID $Autotask_CompanyID | Out-Null
 				$dupeContactsGrid.Rows | ForEach-Object {
 					$ContactID = $_.Cells[0].Value
 					$CurrentName = $_.Cells[1].Value
