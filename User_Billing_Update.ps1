@@ -332,6 +332,15 @@ if ($CheckEmail) {
 ##### Get Data and Start the matching process #####
 ###################################################
 
+# Verify we can connect to the ITG API
+$OrganizationInfo = Get-ITGlueOrganizations -id $OrgID
+if (!$OrganizationInfo -or !$OrganizationInfo.data -or ($OrganizationInfo.data | Measure-Object).Count -lt 1 -or !$OrganizationInfo.data[0].attributes -or !$OrganizationInfo.data[0].attributes."short-name") {
+	Write-Error "Could not connect to the IT Glue API. Exiting..."
+	exit 1
+} else {
+	Write-Host "Successfully connected to the ITG API."
+}
+
 # Get the contact list from IT Glue
 Write-Host "Querying IT Glue..."
 $FullContactList = Get-ITGlueContacts -page_size 1000 -organization_id $OrgID
@@ -351,7 +360,19 @@ if ($FullContactList.Count -gt 999) {
 	$FullContactList = @()
 	$i = 1
 	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
-		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		$Contacts_Next = Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID
+		if (!$Contacts_Next -or $Contacts_Next.Error) {
+			# We got an error querying contacts, wait and try again
+			Start-Sleep -Seconds 2
+			$Contacts_Next = Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID
+	
+			if (!$Contacts_Next -or $Contacts_Next.Error) {
+				Write-PSFMessage -Level Error -Message "An error occurred trying to get the existing contacts from ITG. Exiting..."
+				Write-PSFMessage -Level Error -Message $Contacts_Next.Error
+				exit 1
+			}
+		}
+		$FullContactList += ($Contacts_Next).data
 		Write-Host "- Got contact set $i"
 		$TotalContacts = ($FullContactList | Measure-Object).Count
 		Write-Host "- Total: $TotalContacts"
@@ -375,9 +396,8 @@ if (($Locations | Measure-Object).Count -gt 1) {
 Write-PSFMessage -Level Verbose -Message "Got $(($Locations | Measure-Object).Count) locations from IT Glue."
 
 # Get the organizations name
-$OrganizationInfo = (Get-ITGlueOrganizations -id $OrgID).data
-$OrgFullName = $OrganizationInfo[0].attributes.name
-$OrgShortName = $OrganizationInfo[0].attributes."short-name"
+$OrgFullName = $OrganizationInfo.data[0].attributes.name
+$OrgShortName = $OrganizationInfo.data[0].attributes."short-name"
 
 # Get the list of contacts that are considered an employee type
 $FullContactList.attributes | Add-Member -MemberType NoteProperty -Name ID -Value $null
@@ -1898,7 +1918,19 @@ if ($BillingUpdate) {
 	$FullContactList = @()
 	$i = 1
 	while ($i -le 10 -and ($FullContactList | Measure-Object).Count -eq (($i-1) * 500)) {
-		$FullContactList += (Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID).data
+		$Contacts_Next = Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID
+		if (!$Contacts_Next -or $Contacts_Next.Error) {
+			# We got an error querying contacts, wait and try again
+			Start-Sleep -Seconds 2
+			$Contacts_Next = Get-ITGlueContacts -page_size 500 -page_number $i -organization_id $OrgID
+	
+			if (!$Contacts_Next -or $Contacts_Next.Error) {
+				Write-PSFMessage -Level Error -Message "An error occurred trying to get the existing contacts from ITG. Exiting..."
+				Write-PSFMessage -Level Error -Message $Contacts_Next.Error
+				exit 1
+			}
+		}
+		$FullContactList += ($Contacts_Next).data
 		Write-Host "- Got contact set $i"
 		$TotalContacts = ($FullContactList | Measure-Object).Count
 		Write-Host "- Total: $TotalContacts"
@@ -2825,7 +2857,9 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 if ($LastUpdatedUpdater_APIURL -and $orgID) {
 	if ($ScriptsLast_FlexAssetID) {
 		$LastUpdatedPage = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $ScriptsLast_FlexAssetID -filter_organization_id $orgID
-		if (!$LastUpdatedPage -or !$LastUpdatedPage.data) {
+		if ($LastUpdatedPage.Error) {
+			Write-PSFMessage -Level Error -Message "There was an error getting the existing Last Updated Page from ITG."
+		} elseif (!$LastUpdatedPage -or !$LastUpdatedPage.data) {
 			# Upload new to ITG
 			$FlexAssetBody = 
 			@{
