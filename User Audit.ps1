@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jan 26 2024
+# Last Modified: Tue Jun 04 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2687,7 +2687,7 @@ if ($FullMatches) {
 		}
 
 		$IgnoreWarnings = @()
-		if ($Contact.notes -match '\# Ignore ([\w\[\]]+) Warnings') {
+		if ($Contact.notes -match '\# Ignore ([\w\[\] ]+) Warnings') {
 			$IgnoreTypes = ([regex]::Matches($Contact.notes, '\# Ignore ([\w\[\]]+) Warnings').Groups | Where-Object { "Groups" -notin $_.PSObject.Properties.Name }).Value
 			$IgnoreWarnings += $IgnoreTypes
 		}
@@ -4243,6 +4243,11 @@ if ($ExportChoice -eq 'Yes') {
 			Write-Host "Exporting Office 365 license report..."
 			$LicensePlanList = Get-AzureADSubscribedSku
 			$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
+			if (!$LicenseTranslationTable) {
+				New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+				Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
+				$LicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
+			}
 		
 			$LicenseList = @()
 			$AzureUsers | ForEach-Object {
@@ -4250,24 +4255,20 @@ if ($ExportChoice -eq 'Yes') {
 				$Licenses = @()
 				$LicenseSkus | ForEach-Object {
 					$sku = $_.SkuId
-					foreach ($license in $licensePlanList) {
-						if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
-							$Licenses += $license.SkuPartNumber
-							break
-						}
-					}
+					$PrettyName = ($LicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
+					$Licenses += $PrettyName
 				}
 		
 				$UserInfo = [pscustomobject]@{
 					Name = $_.DisplayName
 					Email = $_.UserPrincipalName
 					PrimaryLicense = ""
-					AssignedLicenses = $Licenses | ForEach-Object { if ($_ -in $O365LicenseTypes.Keys) { $O365LicenseTypes[$_] } else { $_ }  }
+					AssignedLicenses = $Licenses
 				}
 		
-				foreach ($LicenseSku in $O365LicenseTypes.Keys) {
-					if ($LicenseSku -in $Licenses) {
-						$UserInfo.PrimaryLicense = $O365LicenseTypes[$LicenseSku]
+				foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
+					if ($PrimaryLicenseType.Value -in $Licenses) {
+						$UserInfo.PrimaryLicense = $PrimaryLicenseType.Value
 						break
 					}
 				}
@@ -4276,12 +4277,13 @@ if ($ExportChoice -eq 'Yes') {
 			}
 
 			# Create a custom overview document (or update it)
+			$TenantName = $OrgFullName
 			$LicenseList_FlexAssetBody =
 			@{
 				type       = 'flexible-assets'
 				attributes = @{
 					traits = @{
-						'name' = "Office 365 License Overview"
+						'name' = "Office 365 License Overview - $($TenantName)"
 						'overview' = ""
 					}
 				}
@@ -4296,43 +4298,56 @@ if ($ExportChoice -eq 'Yes') {
 			$LicenseList_FlexAssetBody.attributes.traits.overview += $LicenseListHTML
 
 			$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $CustomOverview_FlexAssetID -filter_organization_id $orgID -include attachments
-			$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
-
-			if (!$ExistingLicenseOverview.data) {
-				$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
-				$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
-				$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
-				Write-Host "Created a new O365 License Overview."
-
-				# relate to the billing overview page
-				if ($ExistingFlexAsset) {
-					$RelatedItems = @{
-						type = 'related_items'
-						attributes = @{
-							destination_id = $ExistingFlexAsset.data.id
-							destination_type = "Flexible Asset"
-						}
-					}
-					New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+			if (!$ExistingLicenseOverview.Error) {
+				if (($ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview - $($TenantName)" } | Measure-Object).Count -gt 0) {
+					$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview - $($TenantName)" }  | Select-Object -First 1
+				} elseif (($ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" } | Measure-Object).Count -gt 0) {
+					$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview" }  | Select-Object -First 1
+				} else {
+					$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview*" }  | Select-Object -First 1
+				}
+				if ($ExistingLicenseOverview.data -and $ExistingLicenseOverview.data.id) {
+					$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -include attachments
 				}
 
-				# and email Office 365 page too if it exists
-				$EmailFilterID = (Get-ITGlueFlexibleAssetTypes -filter_name "Email").data
-				$EmailOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $EmailFilterID.id -filter_organization_id $orgID
-				$EmailOverview.data = $EmailOverview.data | Where-Object { $_.attributes.name -eq "Office 365" }  | Select-Object -First 1
-				if ($EmailOverview) {
-					$RelatedItems = @{
-						type = 'related_items'
-						attributes = @{
-							destination_id = $EmailOverview.data.id
-							destination_type = "Flexible Asset"
+				if (!$ExistingLicenseOverview.data -and !$ExistingLicenseOverview.Error) {
+					$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
+					$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
+					$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
+					Write-Host "Created a new O365 License Overview."
+
+					# relate to the billing overview page
+					if ($ExistingFlexAsset) {
+						$RelatedItems = @{
+							type = 'related_items'
+							attributes = @{
+								destination_id = $ExistingFlexAsset.data.id
+								destination_type = "Flexible Asset"
+							}
 						}
+						New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
 					}
-					New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+
+					# and email Office 365 page too if it exists
+					$EmailFilterID = (Get-ITGlueFlexibleAssetTypes -filter_name "Email").data
+					$EmailOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $EmailFilterID.id -filter_organization_id $orgID
+					$EmailOverview.data = $EmailOverview.data | Where-Object { $_.attributes.name -eq "Office 365" }  | Select-Object -First 1
+					if ($EmailOverview) {
+						$RelatedItems = @{
+							type = 'related_items'
+							attributes = @{
+								destination_id = $EmailOverview.data.id
+								destination_type = "Flexible Asset"
+							}
+						}
+						New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+					}
+				} else {
+					Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
+					Write-Host "Updated the O365 License Overview."
 				}
 			} else {
-				Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
-				Write-Host "Updated the O365 License Overview."
+				Write-Error "An error occurred trying to get the existing license overview from ITG. Skipped updating."
 			}
 
 			# Create the excel document
