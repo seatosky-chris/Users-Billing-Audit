@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Tue Jun 04 2024
+# Last Modified: Thu Jun 06 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -730,7 +730,16 @@ if ($UserAudit) {
 			if (!$LicenseTranslationTable) {
 				New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
 				Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
-				$LicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
+				$FullLicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
+				$LicenseTranslationTable_Temp = $FullLicenseTranslationTable | 
+					Group-Object String_Id, Product_Display_Name | 
+ 					Foreach-Object { $_.Group | Select-Object String_Id, Product_Display_Name -First 1} | 
+  					Sort-Object String_Id, Product_Display_Name
+
+				$LicenseTranslationTable = @{}
+				$LicenseTranslationTable_Temp | ForEach-Object {
+					$LicenseTranslationTable[$_.String_Id] = $_.Product_Display_Name
+				}
 			}
 
 			$LicensePlanList = Get-AzureADSubscribedSku
@@ -749,15 +758,19 @@ if ($UserAudit) {
 					$Licenses = @()
 					$LicenseSkus | ForEach-Object {
 						$sku = $_.SkuId
-						$PrettyName = ($LicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
-						$Licenses += $PrettyName
+						foreach ($license in $licensePlanList) {
+							if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
+								$Licenses += $license.SkuPartNumber
+								break
+							}
+						}
 					}
 					$_.AssignedLicenses = $Licenses
 					$_.PrimaryLicense = "None"
 
 					foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
-						if ($PrimaryLicenseType.Value -in $Licenses) {
-							$_.PrimaryLicense = $PrimaryLicenseType.Value
+						if ($PrimaryLicenseType.Key -in $Licenses) {
+							$_.PrimaryLicense = $LicenseTranslationTable[$PrimaryLicenseType.Key]
 							break
 						}
 					}
@@ -2701,10 +2714,11 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 	Write-PSFMessage -Level Verbose -Message "Exporting Office 365 License Report."
 	$LicensePlanList = Get-AzureADSubscribedSku
 	$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
+
 	if (!$LicenseTranslationTable) {
 		New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
 		Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
-		$LicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
+		$FullLicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
 	}
 
 	$LicenseList = @()
@@ -2713,7 +2727,7 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 		$Licenses = @()
 		$LicenseSkus | ForEach-Object {
 			$sku = $_.SkuId
-			$PrettyName = ($LicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
+			$PrettyName = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
 			$Licenses += $PrettyName
 		}
 
@@ -2726,7 +2740,7 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 
 		foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
 			if ($PrimaryLicenseType.Value -in $Licenses) {
-				$UserInfo.PrimaryLicense = $PrimaryLicenseType.Value
+				$_.PrimaryLicense = $PrimaryLicenseType.Value
 				break
 			}
 		}
