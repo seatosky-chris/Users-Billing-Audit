@@ -4295,6 +4295,10 @@ if ($ExportChoice -eq 'Yes') {
 
 			# Create a custom overview document (or update it)
 			$TenantName = $OrgFullName
+			$TenantDetails = Get-AzureADTenantDetail
+			if ($TenantDetails -and $TenantDetails.DisplayName) {
+				$TenantName = $TenantDetails.DisplayName
+			}
 			$LicenseList_FlexAssetBody =
 			@{
 				type       = 'flexible-assets'
