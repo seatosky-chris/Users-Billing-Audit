@@ -2724,26 +2724,28 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 	$LicenseList = @()
 	$AzureUsers | ForEach-Object {
 		$LicenseSkus = $_.AssignedLicenses | Select-Object SkuId
-		$Licenses = @()
+		$Licenses = @{}
 		$LicenseSkus | ForEach-Object {
 			$sku = $_.SkuId
-			$PrettyName = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
-			$Licenses += $PrettyName
+			$License = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique)
+			$Licenses[$License.String_Id] = $License.Product_Display_Name
 		}
 
 		$UserInfo = [pscustomobject]@{
 			Name = $_.DisplayName
 			Email = $_.UserPrincipalName
 			PrimaryLicense = ""
-			AssignedLicenses = $Licenses
+			AssignedLicenses = @()
 		}
-
+		
 		foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
-			if ($PrimaryLicenseType.Value -in $Licenses) {
-				$_.PrimaryLicense = $PrimaryLicenseType.Value
+			if ($PrimaryLicenseType.Key -in $Licenses.Keys) {
+				$UserInfo.PrimaryLicense = $Licenses[$PrimaryLicenseType.Key]
 				break
 			}
 		}
+
+		$UserInfo.AssignedLicenses = @($Licenses.Values)
 
 		$LicenseList += $UserInfo
 	}

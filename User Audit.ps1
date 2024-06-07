@@ -3508,8 +3508,8 @@ if ($EmailType -eq "O365") {
 			foreach ($License in $LicensePlanList) {
 				if ($License.ConsumedUnits -lt $License.PrepaidUnits.Enabled -and $License.SkuPartNumber -notlike "*FREE*") {
 					$UnusedLicenses += [pscustomobject]@{
-						$PrettyName = ($LicenseTranslationTable |  Where-Object {$_.GUID -eq $License.SkuPartNumber } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
-						License = $O365LicenseTypes[$License.SkuPartNumber]
+						License = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $License.SkuId } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
+						LicenseSku = $License.SkuPartNumber
 						Amount = ($License.PrepaidUnits.Enabled - $License.ConsumedUnits)
 					}
 				}
@@ -3530,14 +3530,14 @@ if ($EmailType -eq "O365") {
 				$AllowedLicenses = ($O365StandardLicenses | Where-Object { $_.Types -like $Match.Type }).Licenses
 				foreach ($AssignedLicense in $O365Mailbox.AssignedLicenses) {
 					# only check primary licenses
-					if ($AssignedLicense -in $O365LicenseTypes_Primary.values -and $AllowedLicenses) {
+					if ($AssignedLicense -in $O365LicenseTypes_Primary.Keys -and $AllowedLicenses) {
 						if ($AssignedLicense -notin $AllowedLicenses -or $AllowedLicenses -contains "None") {
 							$BadLicenses += [pscustomobject]@{
 								"O365 Name" = $Match."O365-Name"
 								"ITG Type" = $Match.Type
 								Email = $Match."O365-PrimarySmtp"
-								License = "$($O365LicenseTypes[$AssignedLicense]) ($AssignedLicense)"
-								"Preferred License" = (($AllowedLicenses | Foreach-Object { $O365LicenseTypes[$_] })  -join " / ")
+								License = "$($LicenseTranslationTable[$AssignedLicense]) ($AssignedLicense)"
+								"Preferred License" = (($AllowedLicenses | Foreach-Object { $LicenseTranslationTable[$_] })  -join " / ")
 							}
 						}
 					}
@@ -3585,7 +3585,7 @@ if ($EmailType -eq "O365") {
 				$LicenseSuggestionsDisplay += [pscustomobject]@{
 					Type = $LicenseSuggestion.Name
 					Codes = $LicenseSuggestion.Value
-					"License Names" = ($LicenseSuggestion.Value | ForEach-Object { $O365LicenseTypes[$_] })
+					"License Names" = ($LicenseSuggestion.Value | ForEach-Object { $LicenseTranslationTable[$_] })
 				}
 			}
 
@@ -4267,27 +4267,29 @@ if ($ExportChoice -eq 'Yes') {
 			$LicenseList = @()
 			$AzureUsers | ForEach-Object {
 				$LicenseSkus = $_.AssignedLicenses | Select-Object SkuId
-				$Licenses = @()
+				$Licenses = @{}
 				$LicenseSkus | ForEach-Object {
 					$sku = $_.SkuId
-					$PrettyName = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique).Product_Display_Name
-					$Licenses += $PrettyName
+					$License = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique)
+					$Licenses[$License.String_Id] = $License.Product_Display_Name
 				}
 		
 				$UserInfo = [pscustomobject]@{
 					Name = $_.DisplayName
 					Email = $_.UserPrincipalName
 					PrimaryLicense = ""
-					AssignedLicenses = $Licenses
+					AssignedLicenses = @()
 				}
 		
 				foreach ($PrimaryLicenseType in $O365LicenseTypes_Primary.GetEnumerator()) {
-					if ($PrimaryLicenseType.Value -in $Licenses) {
-						$UserInfo.PrimaryLicense = $PrimaryLicenseType.Value
+					if ($PrimaryLicenseType.Key -in $Licenses.Keys) {
+						$UserInfo.PrimaryLicense = $Licenses[$PrimaryLicenseType.Key]
 						break
 					}
 				}
 		
+				$UserInfo.AssignedLicenses = @($Licenses.Values)
+
 				$LicenseList += $UserInfo
 			}
 
