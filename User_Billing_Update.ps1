@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Jun 06 2024
+# Last Modified: Fri Jun 14 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -1072,6 +1072,7 @@ if ($UserAudit) {
 
 	# Update the Device Audit DB if applicable and get usage data if applicable
 	$UserUsage = @()
+	$DBUsers = $false
 	if ($FullMatches -and $Device_DB_APIKey -and $Device_DB_APIEndpoint) {
 		If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
 		If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
@@ -1103,6 +1104,7 @@ if ($UserAudit) {
 				$ExistingUsers = Get-CosmosDbDocument -Context $resourceContext -Database $DB_Name -CollectionId "Users" -Query $Query -PartitionKey 'user'
 
 				if ($ExistingUsers) {
+					$DBUsers = $ExistingUsers
 					$Now_UTC = Get-Date (Get-Date).ToUniversalTime() -UFormat '+%Y-%m-%dT%H:%M:%S.000Z'
 					$UserCount = ($ExistingUsers | Measure-Object).Count
 					$i = 0
@@ -1123,7 +1125,7 @@ if ($UserAudit) {
 
 							# Still no match, fall back to email-only search
 							if (!$Match) {
-								$Match = $FullMatches | Where-Object { $_.'O365-PrimarySmtp' -match "$EscapedUsername\.user@" -or $_.'ITG-Notes' -match ".*(Primary O365 Email: " + $EscapedUsername + "@).*" } | Select-Object -First 1
+								$Match = $FullMatches | Where-Object { $_.'O365-PrimarySmtp' -match "$EscapedUsername@" -or $_.'ITG-Notes' -match ".*(Primary O365 Email: " + $EscapedUsername + "@).*" } | Select-Object -First 1
 							}
 						}
 
@@ -1147,6 +1149,8 @@ if ($UserAudit) {
 								$User.ITG_ID = $Match.id
 								$UpdateRequired = $true
 							}
+
+							$Match | Add-Member -MemberType NoteProperty -Name DBUserID -Value $User.id -ErrorAction Ignore
 						}
 
 						$UserID = $User.Id
@@ -1238,10 +1242,47 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Searching for discrepancies."
 		$WarnContacts = New-Object -TypeName "System.Collections.Generic.List[Object]"
 
+		function Get-UsersDBLastActivity($UserID) {
+			$UsersUsage = $false
+			if ($PartTimeEmployeesByUsage -and $UserUsage) {
+				$UsersUsage = $UserUsage | Where-Object { $_.User.id -eq $UserID }
+			} else {
+				$headers = @{
+					'x-api-key' = $Device_DB_APIKey
+				}
+				$body = @{
+					'tokenType' = 'userusage'
+				}
+				$Token2 = Invoke-RestMethod -Method Post -Uri $Device_DB_APIEndpoint -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
+	
+				if ($Token2) {
+					$collectionId2 = Get-CosmosDbCollectionResourcePath -Database 'DeviceUsage' -Id 'UserUsage'
+					$contextToken2 = New-CosmosDbContextToken `
+						-Resource $collectionId2 `
+						-TimeStamp (Get-Date $Token2.Timestamp) `
+						-TokenExpiry $Token2.Life `
+						-Token (ConvertTo-SecureString -String $Token2.Token -AsPlainText -Force) 
+					$resourceContext2 = New-CosmosDbContext -Account $CosmosDBAccount -Database $DB_Name -Token $contextToken2
+				}
+	
+				if ($resourceContext2) {
+					$Query21 = "SELECT * FROM UserUsage AS uu WHERE uu.id = '$UserID'"
+					$UsersUsage = Get-CosmosDbDocument -Context $resourceContext2 -Database $DB_Name -CollectionId "UserUsage" -Query $Query21
+				}
+			}
+	
+			if ($UsersUsage) {
+				return $UsersUsage.LastActive;
+			} else {
+				return $false
+			}
+		}
+
 		foreach ($Match in $FullMatches) {
 			$MatchID = $Match.id
 			$Contact = $EmployeeContacts | Where-Object { $_.ID -eq $MatchID }
 			$ContactType = $Contact."contact-type-name"
+			$DBUser = $DBUsers | Where-Object { $_.Id -eq $Match.DBUserID }
 
 			if ($Contact.notes -like "*# Ignore Warnings*") {
 				continue;
@@ -1279,6 +1320,11 @@ if ($UserAudit) {
 				}
 			}
 
+			$LoginUserType = $false
+			if ($DBUser -and $DBUser.DomainOrLocal) {
+				$LoginUserType = $DBUser.DomainOrLocal
+			}
+
 			###########
 			# AD Checks
 			if ($CheckAD) {
@@ -1304,9 +1350,11 @@ if ($UserAudit) {
 					}
 
 					# If email only accounts might have an associated AD account, lets check if the groups make this look like an email only user
+					# Note that the EmailOnly indicator is just to mark an account as EmailOnly when it doesn't appear to be at first (e.g. it has an associated AD account)
+					# Even if it is false, the script still considers someone EmailOnly if they solely have an O365 account
 					$EmailOnly = $false
 					$EmailOnlyDetails = ""
-					if ($EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.PSObject.Properties.Name -contains "Groups") {
+					if ($EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.PSObject.Properties.Name -contains "Groups" -and $LoginUserType -notin ('Local', 'AzureAD')) {
 						$EmployeeGroups = @()
 						foreach ($Group in $ADMatch.Groups) {
 							if (($EmailOnlyGroupsIgnore | ForEach-Object{$Group -like $_}) -notcontains $true ) {
@@ -1377,7 +1425,7 @@ if ($UserAudit) {
 						$EmailOnlyDetails = "Mailbox is not a UserMailbox"
 					}
 
-					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and 'ToTerminated' -notin $IgnoreWarnings) {
+					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and $LoginUserType -notin ('Local', 'AzureAD') -and 'ToTerminated' -notin $IgnoreWarnings) {
 						# ToTerminated
 						if ($ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave') {
 							$WarnObj.type = "ToTerminated"
@@ -1387,7 +1435,7 @@ if ($UserAudit) {
 						# ImproperlyTerminated
 						$WarnObj.type = "ImproperlyTerminated"
 						$WarnObj.reason = "AD Account Improperly Disabled. Please review and fix. (Description lists Disabled but account is not disabled.)"
-					} elseif ((!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly)) -and $ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+					} elseif ((!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD')) -and $ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
 						# MaybeTerminate
 						$WarnObj.type = "MaybeTerminate"
 						$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
@@ -1398,7 +1446,8 @@ if ($UserAudit) {
 							$WarnObj.reason += " (Last Login: Never)"
 						}
 						# If $InactivityO365Preference is $true, this gets skipped and will only be checked in the O365 section if the O365 account is inactive
-					} elseif ($NoRecentUsage -and (!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-60)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly)) -and 
+					} elseif ($NoRecentUsage -and (!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-60)) -and 
+							(!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD')) -and 
 							$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
 						# MaybeTerminate[NoRecentDeviceUsage]
 						$WarnObj.type = "MaybeTerminate[NoRecentDeviceUsage]"
@@ -1470,7 +1519,7 @@ if ($UserAudit) {
 				if (!$O365Match) { 
 					# If no O365 account or AD account:
 					# ToTerminated
-					if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated' -and 'ToTerminated' -notin $IgnoreWarnings) {
+					if (((!$HasAD -and $CheckAD) -or !$CheckAD) -and $ContactType -ne 'Terminated' -and $LoginUserType -ne 'Local' -and 'ToTerminated' -notin $IgnoreWarnings) {
 						$WarnObj = @{
 							id = $MatchID
 							category = 'None'
@@ -1487,9 +1536,11 @@ if ($UserAudit) {
 				}
 
 				# If email only accounts might have an associated AD account, lets check if the groups make this look like an email only user
+				# Note that the EmailOnly indicator is just to mark an account as EmailOnly when it doesn't appear to be at first (e.g. it has an associated AD account)
+				# Even if it is false, the script still considers someone EmailOnly if they solely have an O365 account
 				$EmailOnly = $false
 				$EmailOnlyDetails = ""
-				if ($EmailOnlyHaveAD -and $HasAD -and $ADEnabled -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.ad.PSObject.Properties.Name -contains "Groups") {
+				if ($EmailOnlyHaveAD -and $HasAD -and $ADEnabled -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.ad.PSObject.Properties.Name -contains "Groups" -and $LoginUserType -notin ('Local', 'AzureAD')) {
 					$EmployeeGroups = @()
 					foreach ($Group in $ADMatch.ad.Groups) {
 						if (($EmailOnlyGroupsIgnore | ForEach-Object{$Group -like $_}) -notcontains $true ) {
@@ -1507,7 +1558,7 @@ if ($UserAudit) {
 				}
 
 				# If not doing an AD check, lets use the O365 licenses and any devices assigned in O365 to device if this is an email only user
-				if (!$CheckAD -and $EmailType -eq "O365" -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and ($O365Match.AssignedLicenses | Measure-Object).Count -gt 0) {
+				if (!$CheckAD -and $EmailType -eq "O365" -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and ($O365Match.AssignedLicenses | Measure-Object).Count -gt 0 -and $LoginUserType -notin ('Local', 'AzureAD')) {
 					$O365Licenses_NotEmailOnly = $O365Match.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
 
 					if (($O365Licenses_NotEmailOnly | Measure-Object).Count -eq 0) {
@@ -1540,7 +1591,7 @@ if ($UserAudit) {
 				}
 
 				# If this user appears to be email only, verify against assigned devices in ITG (if they are assigned a device, then they are not email-only)
-				if ($EmailOnly) {
+				if ($EmailOnly -or !$HasAD) {
 					$ITGUserDetails = Get-ITGlueContacts -id $MatchID -include 'related_items'
 					$Existing_RelatedItems = $false
 					if ($ITGUserDetails.included) {
@@ -1564,7 +1615,7 @@ if ($UserAudit) {
 					name = $Contact.name
 				}
 
-				if ($O365Match.AccountDisabled -eq $true -and $O365Match.RecipientTypeDetails -like 'UserMailbox') {
+				if ($O365Match.AccountDisabled -eq $true -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and $LoginUserType -ne 'Local') {
 					if (!$HasAD -and 'ToTerminated' -notin $IgnoreWarnings) {
 						# ToTerminated
 						if ($ContactType -ne 'Terminated' -and $ContactType -ne "Employee - On Leave") {
@@ -1580,19 +1631,19 @@ if ($UserAudit) {
 					# ImproperlyTerminated
 					$WarnObj.type = "ImproperlyTerminated"
 					$WarnObj.reason = "$EmailType Account Improperly Disabled. Please review and fix. (DisplayName lists Disabled but account is not disabled.)"
-				} elseif ($EmailType -eq 'O365' -and ($O365Match.PrimarySmtpAddress -like "no license" -or ($O365Match.AssignedLicenses | Measure-Object).count -eq 0 -or $O365Match.RecipientTypeDetails -like "None") -and $ContactType -ne 'Terminated' -and !$HasAD -and 'MaybeTerminate' -notin $IgnoreWarnings) {
+				} elseif ($EmailType -eq 'O365' -and ($O365Match.PrimarySmtpAddress -like "no license" -or ($O365Match.AssignedLicenses | Measure-Object).count -eq 0 -or $O365Match.RecipientTypeDetails -like "None") -and $ContactType -ne 'Terminated' -and !$HasAD -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate"
 					$WarnObj.reason = "$EmailType Account is Unlicensed and no AD account is associated with this contact. Should this account be terminated? Consider changing the IT Glue type to 'Terminated'."
-				} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and 'MaybeTerminate' -notin $IgnoreWarnings) {
+				} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate"
 					$WarnObj.reason = "$EmailType Account is a Shared Mailbox and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
-				} elseif ($O365Match.DeliverToMailboxAndForward -eq $false -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and ($O365Match.ForwardingSmtpAddress -or $O365Match.ForwardingAddress) -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[Forwarding]' -notin $IgnoreWarnings) {
+				} elseif ($O365Match.DeliverToMailboxAndForward -eq $false -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and ($O365Match.ForwardingSmtpAddress -or $O365Match.ForwardingAddress) -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[Forwarding]' -notin $IgnoreWarnings) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate[Forwarding]"
 					$WarnObj.reason = "$EmailType Account has forwarding setup and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated', or if temporary, to 'Employee - On Leave'."
-				} elseif ($O365Match.HiddenFromAddressListsEnabled -eq $true -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[GAL]' -notin $IgnoreWarnings) {
+				} elseif ($O365Match.HiddenFromAddressListsEnabled -eq $true -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[GAL]' -notin $IgnoreWarnings) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate[GAL]"
 					$WarnObj.reason = "$EmailType Account is hidden from GAL and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
@@ -1600,11 +1651,11 @@ if ($UserAudit) {
 					# ToEnabled
 					$WarnObj.type = "ToEnabled"
 					$WarnObj.reason = "$EmailType Account Enabled. IT Glue Contact should not be 'Terminated'."
-				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -notlike "Shared Account" -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
+				} elseif ($ContactType -notlike "Internal / Shared Mailbox" -and $ContactType -notlike "Shared Account" -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.RecipientTypeDetails -notlike 'UserMailbox' -and $O365Match.RecipientTypeDetails -notlike 'None' -and $LoginUserType -notin @('Local', 'AzureAD') -and 'ToSharedMailbox' -notin $IgnoreWarnings) {
 					# ToSharedMailbox
 					$WarnObj.type = "ToSharedMailbox"
 					$WarnObj.reason = "$EmailType account appears to be a shared mailbox. Consider changing the IT Glue Contact type to 'Internal / Shared Mailbox'."
-				} elseif ($CheckAD -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and (!$HasAD -or $EmailOnly) -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
+				} elseif ($CheckAD -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and (!$HasAD -or $EmailOnly) -and $LoginUserType -notin @('Local', 'AzureAD') -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
 					# ToEmailOnly (with AD)
 					$WarnObj.type = "ToEmailOnly"
 					if ($EmailOnly) {
@@ -1615,7 +1666,7 @@ if ($UserAudit) {
 					} else {	
 						$WarnObj.reason = "$EmailType account has no associated AD account. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
 					}
-				} elseif (!$CheckAD -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and $EmailOnly -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
+				} elseif (!$CheckAD -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -notlike "Internal / Shared Mailbox" -and $EmailOnly -and $LoginUserType -notin @('Local', 'AzureAD') -and $O365Match.RecipientTypeDetails -like 'UserMailbox' -and 'ToEmailOnly' -notin $IgnoreWarnings) {
 					# ToEmailOnly (without AD)
 					$WarnObj.type = "ToEmailOnly"
 					$WarnObj.reason = "$EmailType account appears to be email-only based on O365 licenses and assigned devices. Consider changing the IT Glue Contact type to 'Employee - Email Only'. Alternatively: 'External User' or 'Internal / Shared Mailbox'."
@@ -1679,6 +1730,43 @@ if ($UserAudit) {
 
 				if ($WarnObj.type){
 					$WarnContacts.Add($WarnObj) | Out-Null
+				}
+			}
+
+			$WarningsAdded = $WarnContacts | Where-Object { $_.id -eq $MatchID }
+			if (($WarningsAdded | Where-Object { $_.type -notlike "*Terminated*" } | Measure-Object).Count -eq 0) {
+				# Extra DeviceDB based activity checks
+				$WarnObj = @{
+					id = $MatchID
+					category = 'DeviceDB'
+					type = $false
+					reason = $false
+					name = $Contact.name
+				}
+
+				if ($LoginUserType -eq 'Local') {
+					# If user uses a local login, check if it was active in the last 60 days
+					$LastActivity = Get-UsersDBLastActivity -UserID $DBUser.Id
+					if ($LastActivity -and (Get-Date $LastActivity) -lt (Get-Date).AddDays(-60)) {
+						# Inactive for 60 days, create a warning
+						# MaybeTerminate
+						$WarnObj.type = "MaybeTerminate"
+						$WarnObj.reason = "Local Account Unused. Maybe disable it? Please review. (Last login > 60 days ago.)"
+						$LastLoginDaysAgo = (New-TimeSpan -Start (Get-Date $LastActivity) -End (Get-Date)).Days
+						$WarnObj.reason += " (Last Login: $($LastLoginDaysAgo) days ago)"
+					}
+
+				} elseif ($LoginUserType -eq 'AzureAD' -and ($WarningsAdded | Where-Object { $_.type -like "*Terminated*" -and $_.category -eq "O365" } | Measure-Object).Count -eq 0) {
+					# If user uses an AzureAD login, check if it was active in the last 90 days
+					$LastActivity = Get-UsersDBLastActivity -UserID $DBUser.Id
+					if ($LastActivity -and (Get-Date $LastActivity) -lt (Get-Date).AddDays(-90)) {
+						# Inactive for 90 days, create a warning
+						# MaybeTerminate
+						$WarnObj.type = "MaybeTerminate"
+						$WarnObj.reason = "Azure Account Unused. Maybe disable it? Please review. (Last login > 90 days ago.)"
+						$LastLoginDaysAgo = (New-TimeSpan -Start (Get-Date $LastActivity) -End (Get-Date)).Days
+						$WarnObj.reason += " (Last Login: $($LastLoginDaysAgo) days ago)"
+					}
 				}
 			}
 		}
