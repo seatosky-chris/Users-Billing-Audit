@@ -39,15 +39,16 @@ $O365LicenseTypes_Primary = [ordered]@{
 	MIDSIZEPACK = "Office 365 Midsize Business"
 	LITEPACK = "Office 365 Small Business"
 	LITEPACK_P2 = "Office 365 Small Business Premium"
-  SPE_F1 = "Microsoft 365 F3"
+  	SPE_F1 = "Microsoft 365 F3"
+	M365_F1 = "Microsoft 365 F1"
 	EXCHANGESTANDARD = "Exchange Online (Plan 1)"
 	EXCHANGEENTERPRISE = "Exchange Online (Plan 2)"
 	EXCHANGEESSENTIALS = "Exchange Online Essentials"
 	EXCHANGE_S_ESSENTIALS = "Exchange Online Essentials"
 	EXCHANGEDESKLESS = "Exchange Online Kiosk"
 	EXCHANGETELCO = "Exchange Online POP"
-  Teams_Ess = "Microsoft Teams Essentials"
-  TEAMS_ESSENTIALS_AAD = "Microsoft Teams Essentials (AAD Identity)"
+  	Teams_Ess = "Microsoft Teams Essentials"
+  	TEAMS_ESSENTIALS_AAD = "Microsoft Teams Essentials (AAD Identity)"
 	WACONEDRIVESTANDARD = "OneDrive for Business (Plan 1)"
 	WACONEDRIVEENTERPRISE = "OneDrive for Business (Plan 2)"
 	SHAREPOINTSTANDARD = "SharePoint Online (Plan 1)"
@@ -64,7 +65,7 @@ $O365LicenseTypes_Primary = [ordered]@{
 $O365LicenseTypes_EmailOnly = @(
   "O365_BUSINESS_ESSENTIALS", "SMB_BUSINESS_ESSENTIALS", "STANDARDPACK", "STANDARDWOFFPACK", 
   "EXCHANGESTANDARD", "EXCHANGEENTERPRISE", "EXCHANGEESSENTIALS", "EXCHANGE_S_ESSENTIALS",
-  "EXCHANGEDESKLESS", "EXCHANGETELCO", "SPE_F1", "Teams_Ess", "TEAMS_ESSENTIALS_AAD", 
+  "EXCHANGEDESKLESS", "EXCHANGETELCO", "SPE_F1", "M365_F1", "Teams_Ess", "TEAMS_ESSENTIALS_AAD", 
   "WACONEDRIVESTANDARD", "WACONEDRIVEENTERPRISE", "SHAREPOINTSTANDARD", "SHAREPOINTENTERPRISE",
   "ATP_ENTERPRISE", "THREAT_INTELLIGENCE", "FLOW_FREE_FLOW_P2_VIRAL"
 )
