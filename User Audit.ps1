@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jun 14 2024
+# Last Modified: Fri Jun 28 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2807,7 +2807,7 @@ if ($FullMatches) {
 				# Even if it is false, the script still considers someone EmailOnly if they solely have an O365 account
 				$EmailOnly = $false
 				$EmailOnlyDetails = ""
-				if ($EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.PSObject.Properties.Name -contains "Groups" -and $LoginUserType -notin ('Local', 'AzureAD')) {
+				if ($EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and $ADMatch.PSObject.Properties.Name -contains "Groups" -and $LoginUserType -notin ('Local', 'AzureAD')) {
 					$EmployeeGroups = @()
 					foreach ($Group in $ADMatch.Groups) {
 						if (($EmailOnlyGroupsIgnore | ForEach-Object{$Group -like $_}) -notcontains $true ) {
@@ -2874,7 +2874,7 @@ if ($FullMatches) {
 							}
 						}
 					}
-				} elseif ($O365Match.o365.RecipientTypeDetails -notlike 'UserMailbox') {
+				} elseif ($O365Match -and $O365Match.o365.RecipientTypeDetails -notlike 'UserMailbox') {
 					$EmailOnlyDetails = "Mailbox is not a UserMailbox"
 				}
 
