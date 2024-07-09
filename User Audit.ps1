@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jun 28 2024
+# Last Modified: Tue Jul 09 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2001,8 +2001,9 @@ if ($CheckEmail) {
 				RecipientTypeDetails, Guid, UserPrincipalName, 
 				DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
 			Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
-		$DisabledAccounts = Get-AzureADUser -Filter "AccountEnabled eq false" | Select-Object -ExpandProperty UserPrincipalName
-		$UnlicensedUsers = Get-AzureADUser | Where-Object {
+		$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle
+		$DisabledAccounts = $AzureUsers | Where-Object { $_.AccountEnabled -eq $false } | Select-Object -ExpandProperty UserPrincipalName
+		$UnlicensedUsers = $AzureUsers | Where-Object {
 			$licensed = $false
 			for ($i = 0; $i -le ($_.AssignedLicenses | Measure-Object).Count ; $i++) { 
 				if ([string]::IsNullOrEmpty($_.AssignedLicenses[$i].SkuId) -ne $true) { 
@@ -2058,7 +2059,6 @@ if ($CheckEmail) {
 		}
 
 		$LicensePlanList = Get-AzureADSubscribedSku
-		$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AssignedLicenses, GivenName, Surname, JobTitle
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AssignedLicenses -Value @()
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AAD_ObjectID -Value $null
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name PrimaryLicense -Value $null
@@ -2168,6 +2168,7 @@ if ($CheckEmail) {
 			$O365MailboxStat = $O365MailboxStats | Where-Object { $_.DisplayName -like $O365Mailboxes[$i].DisplayName }
 			$O365Mailboxes[$i].LastUserActionTime = $O365MailboxStat.LastLogonTime
 		}
+		$UnlicensedUsers = @()
 	}
 
 	if ($EmailType -eq "O365") {

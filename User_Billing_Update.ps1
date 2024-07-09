@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jun 28 2024
+# Last Modified: Tue Jul 09 2024
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -702,8 +702,9 @@ if ($UserAudit) {
 					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
 				Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
 			Write-PSFMessage -Level Verbose -Message "Got $(($O365Mailboxes | Measure-Object).Count) mailboxes from O365."
-			$DisabledAccounts = Get-AzureADUser -Filter "AccountEnabled eq false" | Select-Object -ExpandProperty UserPrincipalName
-			$UnlicensedUsers = Get-AzureADUser | Where-Object {
+			$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle
+			$DisabledAccounts = $AzureUsers | Where-Object { $_.AccountEnabled -eq $false } | Select-Object -ExpandProperty UserPrincipalName
+			$UnlicensedUsers = $AzureUsers | Where-Object {
 				$licensed = $false
 				for ($i = 0; $i -le ($_.AssignedLicenses | Measure-Object).Count ; $i++) { 
 					if ([string]::IsNullOrEmpty($_.AssignedLicenses[$i].SkuId) -ne $true) { 
@@ -743,7 +744,6 @@ if ($UserAudit) {
 			}
 
 			$LicensePlanList = Get-AzureADSubscribedSku
-			$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AssignedLicenses, GivenName, Surname, JobTitle
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AssignedLicenses -Value @()
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AAD_ObjectID -Value $null
 			$O365Mailboxes | Add-Member -MemberType NoteProperty -Name PrimaryLicense -Value $null
@@ -802,6 +802,7 @@ if ($UserAudit) {
 				$O365Mailboxes[$i].LastName = $O365MailboxUser.LastName
 				$O365Mailboxes[$i].Title = $O365MailboxUser.Title
 			}
+			$UnlicensedUsers = @()
 		}
 
 		$MailboxCount = ($O365Mailboxes | Measure-Object).Count
