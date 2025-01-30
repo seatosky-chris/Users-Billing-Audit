@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Tue Jul 09 2024
+# Last Modified: Thu Jan 30 2025
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2747,7 +2747,10 @@ if ($BillingUpdate) {
 				$HTMLBody += '<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">'
 		
 				$TotalsByLoc | Foreach-Object {
-					$HTMLBody += "<strong>$($_.Location):</strong> $($_.Billed) <br />"
+					$LocationName = if ($_.Location) { $_.Location} else { "Unknown"}
+					if ($_.Billed -and $_.Billed -gt 0) {
+						$HTMLBody += "<strong>$($LocationName):</strong> $($_.Billed) <br />"
+					}
 				}
 				$HTMLBody += "</p>"
 			}
