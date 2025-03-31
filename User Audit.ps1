@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Tue Jul 09 2024
+# Last Modified: Fri Mar 28 2025
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -14,6 +14,7 @@
 # HISTORY:
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
+# 2025-03-28	CJ	Deprecating AzureAD module for MSGraph
 # 2024-01-26	CJ	Added filtering O365 and Intune devices by computers in the device DB to prevent personal devices from triggering an Email only to Employee suggestion
 # 2023-10-26	CJ	Fixed bug where the $EmailOnlyGroupsOUIgnore config setting wasn't working
 # 2023-03-27	CJ	Improvements to Part Time and Email Only alerts
@@ -129,7 +130,7 @@ If (Get-Module -ListAvailable -Name "ITGlueAPI") {
 	import-module ITGlueAPI
 }
 # If using my old version of the ITGlueAPI under 2.1.0, upgrade to the official version
-$Version = (Get-Module ITGlueAPI).Version
+$Version = (Get-Module -ListAvailable -Name ITGlueAPI | Sort-Object Version -Descending | Select-Object -First 1).Version
 if ($Version.Major -lt 2 -or $Version.Minor -lt 1) {
 	Remove-Module ITGlueAPI
 	Uninstall-Module ITGlueAPI
@@ -138,7 +139,7 @@ if ($Version.Major -lt 2 -or $Version.Minor -lt 1) {
 	Import-Module ITGlueAPI -Force
 }
 
-$Version = (Get-Module -ListAvailable -Name "ImportExcel").Version
+$Version = (Get-Module -ListAvailable -Name "ImportExcel" | Sort-Object Version -Descending | Select-Object -First 1).Version
 if ($Version.Major -lt 7 -or $Version.Minor -lt 8 -or $Version.Build -lt 4) {
 	Remove-Module ImportExcel
 	Uninstall-Module ImportExcel
@@ -184,115 +185,31 @@ $global:timer = $null
 Write-Host "Successfully imported required modules and configured the ITGlue API."
 
 if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azure")) {
-	Write-Host "Connecting to Azure..."
-	$ClientCertificate = Get-Item "Cert:\LocalMachine\My\$($O365UnattendedLogin.CertificateThumbprint)"
-
-	# Create base64 hash of certificate
-	$CertificateBase64Hash = [System.Convert]::ToBase64String($ClientCertificate.GetCertHash())
-
-	# Create JWT timestamp for expiration
-	$StartDate = (Get-Date "1970-01-01T00:00:00Z" ).ToUniversalTime()
-	$JWTExpirationTimeSpan = (New-TimeSpan -Start $StartDate -End (Get-Date).ToUniversalTime().AddMinutes(2)).TotalSeconds
-	$JWTExpiration = [math]::Round($JWTExpirationTimeSpan,0)
-
-	# Create JWT validity start timestamp
-	$NotBeforeExpirationTimeSpan = (New-TimeSpan -Start $StartDate -End ((Get-Date).ToUniversalTime())).TotalSeconds
-	$NotBefore = [math]::Round($NotBeforeExpirationTimeSpan,0)
-
-	# Create JWT header
-	$JWTHeader = @{
-		alg = "RS256"
-		typ = "JWT"
-		# Use the CertificateBase64Hash and replace/strip to match web encoding of base64
-		x5t = $CertificateBase64Hash -replace '\+','-' -replace '/','_' -replace '='
+	Write-Host "Connecting to Microsoft Graph (Azure)..."
+	
+	$Version = (Get-Module -ListAvailable -Name "Microsoft.Graph.Users" | Sort-Object Version -Descending | Select-Object -First 1).Version
+	if ($Version.Major -lt 2 -or $Version.Minor -lt 8) {
+		Remove-Module Microsoft.Graph.Users
+		Uninstall-Module Microsoft.Graph.Users
+		Install-Module -Name Microsoft.Graph.Users
+		Import-Module Microsoft.Graph.Users -Force
 	}
 
-	# Create JWT payload
-	$JWTPayLoad = @{
-		# What endpoint is allowed to use this JWT
-		aud = "https://login.microsoftonline.com/$($O365UnattendedLogin.TenantID)/oauth2/token"
-
-		# Expiration timestamp
-		exp = $JWTExpiration
-
-		# Issuer = your application
-		iss = $O365UnattendedLogin.AppID
-
-		# JWT ID: random guid
-		jti = [guid]::NewGuid()
-
-		# Not to be used before
-		nbf = $NotBefore
-
-		# JWT Subject
-		sub = $O365UnattendedLogin.AppID
-	}
-
-	# Convert header and payload to base64
-	$JWTHeaderToByte = [System.Text.Encoding]::UTF8.GetBytes(($JWTHeader | ConvertTo-Json))
-	$EncodedHeader = [System.Convert]::ToBase64String($JWTHeaderToByte)
-
-	$JWTPayLoadToByte =  [System.Text.Encoding]::UTF8.GetBytes(($JWTPayload | ConvertTo-Json))
-	$EncodedPayload = [System.Convert]::ToBase64String($JWTPayLoadToByte)
-
-	# Join header and Payload with "." to create a valid (unsigned) JWT
-	$JWT = $EncodedHeader + "." + $EncodedPayload
-
-	# Get the private key object of your certificate
-	$PrivateKey = $ClientCertificate.PrivateKey
-
-	# Define RSA signature and hashing algorithm
-	$RSAPadding = [Security.Cryptography.RSASignaturePadding]::Pkcs1
-	$HashAlgorithm = [Security.Cryptography.HashAlgorithmName]::SHA256
-
-	# Create a signature of the JWT
-	$Signature = [Convert]::ToBase64String(
-		$PrivateKey.SignData([System.Text.Encoding]::UTF8.GetBytes($JWT),$HashAlgorithm,$RSAPadding)
-	) -replace '\+','-' -replace '/','_' -replace '='
-
-	# Join the signature to the JWT with "."
-	$JWT = $JWT + "." + $Signature
-
-	# Create a hash with body parameters
-	$Body = @{
-		client_id = $O365UnattendedLogin.AppID
-		client_assertion = $JWT
-		client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-		scope = "https://graph.microsoft.com/.default"
-		grant_type = "client_credentials"
-
-	}
-
-	$Url = "https://login.microsoftonline.com/$($O365UnattendedLogin.TenantID)/oauth2/v2.0/token"
-
-	# Use the self-generated JWT as Authorization
-	$Header = @{
-		Authorization = "Bearer $JWT"
-	}
-
-	# Splat the parameters for Invoke-Restmethod for cleaner code
-	$PostSplat = @{
-		ContentType = 'application/x-www-form-urlencoded'
-		Method = 'POST'
-		Body = $Body
-		Uri = $Url
-		Headers = $Header
-	}
-	$AzGraphAuthToken = Invoke-RestMethod @PostSplat
-
-	$AzGraphHeader = @{
-		Authorization = "$($AzGraphAuthToken.token_type) $($AzGraphAuthToken.access_token)"
-	}
-
-	If (Get-Module -ListAvailable -Name "AzureAD") {
-		Import-Module AzureAD
+	$GraphModules = (Get-Module -ListAvailable).Name | Where-Object { $_ -like "Microsoft.Graph*" }
+	If ("Microsoft.Graph" -in $GraphModules -or ("Microsoft.Graph.Users" -in $GraphModules -and "Microsoft.Graph.Identity.SignIns" -in $GraphModules -and "Microsoft.Graph.Identity.DirectoryManagement" -in $GraphModules)) {
+		Import-Module Microsoft.Graph.Users
+		Import-Module Microsoft.Graph.Identity.DirectoryManagement
 	} else {
-		Install-Module -Name AzureAD
+		Install-Module -Name Microsoft.Graph.Authentication
+		Install-Module -Name Microsoft.Graph.Users
+		Install-Module Microsoft.Graph.Identity.DirectoryManagement
 	}
+
+	# Connect to Microsoft Graph (for Azure)
 	if ($O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
-		Connect-AzureAD -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -ApplicationId $O365UnattendedLogin.AppID -TenantId $O365UnattendedLogin.TenantId
+		Connect-MgGraph -CertificateThumbprint $O365UnattendedLogin.CertificateThumbprint -ClientID $O365UnattendedLogin.AppID -TenantId $O365UnattendedLogin.TenantId -NoWelcome
 	} else {
-		Connect-AzureAD -AccountID $O365LoginUser
+		Connect-MgGraph
 	}
 
 	Write-Host "Successfully imported Azure related modules."
@@ -939,24 +856,10 @@ if ($CheckAD) {
 
 	if ($ADType -eq "Azure") {
 		## Azure
-		$ApiUrl = "https://graph.microsoft.com/beta/users?`$select=id,displayName,givenName,surname,userPrincipalName,accountEnabled,signInActivity,city,department,jobTitle,mail,mailNickname,userType,assignedLicenses&`$top=120"
-		$FullADUsers = @()
-
-		while ($null -ne $ApiUrl) {
-			$Response = Invoke-RestMethod -Uri $ApiUrl -Headers $AzGraphHeader -Method Get -ContentType "application/json"
-			if ($Response.value) {
-				$FullADUsers += $Response.value
-			}
-			$ApiUrl = $Response.'@odata.nextlink'
-		}
-
-		if (!$FullADUsers) {
-			Write-Host "Could not connect to the MS Graph Beta API, falling back to the Get-AzureADUser command." -ForegroundColor Yellow
-			$FullADUsers = Get-AzureADUser -All $true
-		}
+		$FullADUsers = Get-MgUser -All -Property Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses | Select-Object Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses
 
 		$FullADUsers = $FullADUsers | 
-							Select-Object -Property @{Name="Id"; E={if ($_.Id) { $_.Id } else { $_.ObjectId }}}, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
+							Select-Object -Property Id, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
 								@{Name="EmailAddress"; E={$_.mail}}, @{Name="Enabled"; E={$_.AccountEnabled}}, @{Name="Description"; E={""}}, SignInActivity,
 								City, Department, @{Name="Division"; E={""}}, @{Name="Title"; E={$_.JobTitle}}, MailNickname, UserType, AssignedLicenses
 		$FullADUsers = $FullADUsers | Where-Object  { $_.UserType -eq "Member" }
@@ -969,8 +872,8 @@ if ($CheckAD) {
 			$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
 			$_ | Add-Member -MemberType NoteProperty -Name LastLogonDate -Value $null
 			$_ | Add-Member -MemberType NoteProperty -Name UsernameStart -Value $null
-			$_.Groups = @((Get-AzureADUserMembership -ObjectId $_.Id | Select-Object DisplayName).DisplayName)
-			$_.LastLogonDate = if($_.signInActivity.lastSignInDateTime) { [DateTime]$_.signInActivity.lastSignInDateTime } else {$null}
+			$_.Groups = @((Get-MgUserMemberOf -UserId $_.Id -All).AdditionalProperties.displayName)
+			$_.LastLogonDate = if($_.signInActivity.lastSuccessfulSignInDateTime) { [DateTime]$_.signInActivity.lastSuccessfulSignInDateTime } elseif ($_.signInActivity.lastSignInDateTime) { [DateTime]$_.signInActivity.lastSignInDateTime } else {$null}
 			$pos = $_.Username.IndexOf("@")
 			$_.UsernameStart = $_.Username.Substring(0, $pos)
 			[int]$PercentComplete = ($i / $ADUserCount * 100)
@@ -2001,7 +1904,7 @@ if ($CheckEmail) {
 				RecipientTypeDetails, Guid, UserPrincipalName, 
 				DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
 			Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
-		$AzureUsers = Get-AzureADUser -All $true | Select-Object ObjectID, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle
+		$AzureUsers = Get-MgUser -All -Property Id, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle | Select-Object Id, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle
 		$DisabledAccounts = $AzureUsers | Where-Object { $_.AccountEnabled -eq $false } | Select-Object -ExpandProperty UserPrincipalName
 		$UnlicensedUsers = $AzureUsers | Where-Object {
 			$licensed = $false
@@ -2058,7 +1961,7 @@ if ($CheckEmail) {
 			}
 		}
 
-		$LicensePlanList = Get-AzureADSubscribedSku
+		$LicensePlanList = Get-MgSubscribedSku
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AssignedLicenses -Value @()
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name AAD_ObjectID -Value $null
 		$O365Mailboxes | Add-Member -MemberType NoteProperty -Name PrimaryLicense -Value $null
@@ -2115,7 +2018,7 @@ if ($CheckEmail) {
 				$LicenseSkus | ForEach-Object {
 					$sku = $_.SkuId
 					foreach ($license in $licensePlanList) {
-						if ($sku -eq $license.ObjectId.substring($license.ObjectId.length - 36, 36)) {
+						if ($sku -eq $license.SkuId) {
 							$Licenses += $license.SkuPartNumber
 							break
 						}
@@ -2133,7 +2036,7 @@ if ($CheckEmail) {
 
 
 				$AzureUser = $AzureUsers | Where-Object { $_.UserPrincipalName -eq $Mailbox.UserPrincipalName }
-				$_.AAD_ObjectID = $AzureUser.ObjectID
+				$_.AAD_ObjectID = $AzureUser.Id
 				$_.FirstName = $AzureUser.GivenName
 				$_.LastName = $AzureUser.Surname
 				$_.Title = $AzureUser.JobTitle
@@ -2827,32 +2730,32 @@ if ($FullMatches) {
 						$O365Licenses_NotEmailOnly = $O365Match.o365.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
 		
 						if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
-							$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.o365.AAD_ObjectID
+							$O365Devices = Get-MgUserRegisteredDevice -UserId $O365Match.o365.AAD_ObjectID
 							if (($O365Devices | Measure-Object).Count -gt 0) {
 								# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
 								$Computers = Get-DeviceDBDevices
 								$O365Devices = $O365Devices | Where-Object { 
-									($_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*") -and
-									$Contact.notes -notlike "*# Ignore O365 Device: $($_.DisplayName.Trim())*" -and
-									$Contact.notes -notlike "*# Ignore InTune Device: $($_.DisplayName.Trim())*"
+									($_.AdditionalProperties.displayName -in $Computers.Hostname -or $_.AdditionalProperties.displayName -like "$($OrgShortName)-*") -and
+									$Contact.notes -notlike "*# Ignore O365 Device: $($_.AdditionalProperties.displayName.Trim())*" -and
+									$Contact.notes -notlike "*# Ignore InTune Device: $($_.AdditionalProperties.displayName.Trim())*"
 								}
 							}
 							if (($O365Devices | Measure-Object).Count -gt 0) {
-								$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
+								$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.AdditionalProperties.displayName -join ", ")
 								$EmailOnly = $false
 							} else {
-								$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.o365.AAD_ObjectID
+								$IntuneDevices = Get-MgUserOwnedDevice -UserId $O365Match.o365.AAD_ObjectID
 								if (($IntuneDevices | Measure-Object).Count -gt 0) {
 									# Filter any devices that aren't in the Device DB and dont use our naming convention (as these may be personal devices)
 									$Computers = Get-DeviceDBDevices
 									$IntuneDevices = $IntuneDevices | Where-Object { 
-										($_.DisplayName -in $Computers.Hostname -or $_.DisplayName -like "$($OrgShortName)-*") -and
-										$Contact.notes -notlike "*# Ignore O365 Device: $($_.DisplayName.Trim())*" -and
-										$Contact.notes -notlike "*# Ignore InTune Device: $($_.DisplayName.Trim())*"
+										($_.AdditionalProperties.displayName -in $Computers.Hostname -or $_.AdditionalProperties.displayName -like "$($OrgShortName)-*") -and
+										$Contact.notes -notlike "*# Ignore O365 Device: $($_.AdditionalProperties.displayName.Trim())*" -and
+										$Contact.notes -notlike "*# Ignore InTune Device: $($_.AdditionalProperties.displayName.Trim())*"
 									}
 								}
 								if (($IntuneDevices | Measure-Object).Count -gt 0) {
-									$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
+									$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.AdditionalProperties.displayName -join ", ")
 									$EmailOnly = $false
 								}
 							}
@@ -3034,9 +2937,9 @@ if ($FullMatches) {
 				$O365Licenses_NotEmailOnly = $O365Match.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
 
 				if (($O365Licenses_NotEmailOnly | Measure-Object).Count -eq 0) {
-					$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.AAD_ObjectID
+					$O365Devices = Get-MgUserRegisteredDevice -UserId $O365Match.AAD_ObjectID
 					if (($O365Devices | Measure-Object).Count -eq 0) {
-						$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.AAD_ObjectID
+						$IntuneDevices = Get-MgUserOwnedDevice -UserId $O365Match.AAD_ObjectID
 						if (($IntuneDevices | Measure-Object).Count -eq 0) {
 							$EmailOnlyDetails = "No devices activated in O365 or assigned in InTune."
 							$EmailOnly = $true
@@ -3048,14 +2951,14 @@ if ($FullMatches) {
 				$O365Licenses_NotEmailOnly = $O365Match.AssignedLicenses | Where-Object { $_ -notin $O365LicenseTypes_EmailOnly }
 
 				if (($O365Licenses_NotEmailOnly | Measure-Object).Count -gt 0) {
-					$O365Devices = Get-AzureADUserRegisteredDevice -ObjectId $O365Match.AAD_ObjectID
+					$O365Devices = Get-MgUserRegisteredDevice -UserId $O365Match.AAD_ObjectID
 					if (($O365Devices | Measure-Object).Count -gt 0) {
-						$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.DisplayName -join ", ")
+						$EmailOnlyDetails = "Has the following O365 Activated Devices: " + ($O365Devices.AdditionalProperties.displayName -join ", ")
 						$EmailOnly = $false
 					} else {
-						$IntuneDevices = Get-AzureADUserOwnedDevice -ObjectId $O365Match.AAD_ObjectID
+						$IntuneDevices = Get-MgUserOwnedDevice -UserId $O365Match.AAD_ObjectID
 						if (($IntuneDevices | Measure-Object).Count -gt 0) {
-							$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.DisplayName -join ", ")
+							$EmailOnlyDetails = "Has the following assigned InTune Devices: " + ($IntuneDevices.AdditionalProperties.displayName -join ", ")
 							$EmailOnly = $false
 						}
 					}
@@ -3573,7 +3476,7 @@ if ($EmailType -eq "O365") {
 
 	if ($O365AuditChoice -eq 'Yes') {
 		if (!$LicensePlanList) {
-			$LicensePlanList = Get-AzureADSubscribedSku
+			$LicensePlanList = Get-MgSubscribedSku
 		}
 		
 		# If $O365StandardLicenses is set, then this is configured and we'll do the audit
@@ -4348,8 +4251,7 @@ if ($ExportChoice -eq 'Yes') {
 		#  Export an Office 365 license report
 		if ($CheckEmail -and $EmailType -eq "O365") {
 			Write-Host "Exporting Office 365 license report..."
-			$LicensePlanList = Get-AzureADSubscribedSku
-			$AzureUsers = Get-AzureADUser -All $true | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
+			$AzureUsers = Get-MgUser -All -Property UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
 			if (!$LicenseTranslationTable) {
 				New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
 				Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
@@ -4387,7 +4289,7 @@ if ($ExportChoice -eq 'Yes') {
 
 			# Create a custom overview document (or update it)
 			$TenantName = $OrgFullName
-			$TenantDetails = Get-AzureADTenantDetail
+			$TenantDetails = Get-MgOrganization
 			if ($TenantDetails -and $TenantDetails.DisplayName) {
 				$TenantName = $TenantDetails.DisplayName
 			}

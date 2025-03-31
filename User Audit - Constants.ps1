@@ -4,12 +4,13 @@
 ### The script has a few requirements that need to be setup before you can run it:
 ###   - Run this on a server that is an AD host for the organization.
 ###   - Powershell 5.1 or above must be installed.
-###   - NuGet must be installed. (See AEM script: IMPROVED - ENABLE NUGET POWERSHELL PROVIDER [WIN])
+###   - NuGet must be installed. (See RMM script: IMPROVED - ENABLE NUGET POWERSHELL PROVIDER [WIN])
 ###   - Module Dependencies: 
 ###     a. Install-Module -Name ITGlueAPI
 ###     b. Install-Module -Name ImportExcel
-###     c. Install-Module -Name AzureAD # (If email is O365)
-###     d. Install-Module -Name ExchangeOnlineManagement # (If email is O365)
+###     c. Install-Module -Name Microsoft.Graph.Users # (If email is O365 or AD is Azure)
+###     d. Install-Module -Name Microsoft.Graph.Identity.DirectoryManagement # (If email is O365 or AD is Azure)
+###     e. Install-Module -Name ExchangeOnlineManagement # (If email is O365)
 ###   - Setup the below constants.
 ##################################################################################################################
 
@@ -162,9 +163,9 @@ $O365LoginUser = ""
 # See this guide for setup instructions: https://github.com/seatosky-chris/Users-Billing-Audit/wiki/Configure-Certificate-for-Unattended-Powershell-Access
 #
 # AppID is the ID of the Azure app setup above
-# TenantID can be found using Get-AzureADTenantDetail  (see ObjectId property, auth with Connect-AzureAD first)
+# TenantID can be found in Microsoft Entra ID > Overview or by using Get-MgOrganization (see Id property, auth with 'Connect-Graph -Scopes DeviceManagementServiceConfig.Read.All' first, you will need to import/install the 'Microsoft.Graph.Identity.DirectoryManagement' module)
 # Organization is the onmicrosoft.com address for the tenant
-# CertificateThumbprint can be found using: Get-ChildItem -path ‘Cert:\*’ -Recurse |where {$_.Subject -like ‘*User Audit*’}
+# CertificateThumbprint can be found using: Get-ChildItem -path 'Cert:\*' -Recurse |where {$_.Subject -like '*User Audit*'}
 #
 # Example: @{
 #    "AppID" = "9220-9add-48d9-9c59-0e0b3"
