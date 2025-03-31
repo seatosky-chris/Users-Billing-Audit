@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Mar 28 2025
+# Last Modified: Mon Mar 31 2025
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -135,7 +135,7 @@ Add-ITGlueBaseURI -base_uri $APIEndpoint
 Add-ITGlueAPIKey $APIKEy
 
 # Install our custom version of the CosmosDB module (if necessary)
-$CosmosDBModule = Get-Module -ListAvailable -Name "CosmosDB"
+$CosmosDBModule = Get-Module -ListAvailable -Name "CosmosDB" | Sort-Object Version | Select-Object -First 1
 
 # If installed and not version 0.0.1 (my custom version), uninstall
 if ($CosmosDBModule -and ($CosmosDBModule.Version.Major -ne 0 -or $CosmosDBModule.Version.Minor -ne 0 -or $CosmosDBModule.Version.Build -ne 1)) {
@@ -154,7 +154,7 @@ if (!$CosmosDBModule) {
 	Expand-Archive "$PSScriptRoot\CosmosDB.zip" -DestinationPath $unzipPath
 	Move-Item -Path "$($unzipPath)\CosmosDB" -Destination "C:\Program Files\WindowsPowerShell\Modules\" -Force
 }
-Import-module CosmosDB
+Import-module CosmosDB -MaximumVersion 0.0.1
 
 Write-Host "Successfully imported required modules and configured the ITGlue API."
 Write-PSFMessage -Level Verbose -Message "Configured ITGlue module."
