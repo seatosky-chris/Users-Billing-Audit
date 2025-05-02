@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Mon Mar 31 2025
+# Last Modified: Fri Apr 25 2025
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -388,11 +388,11 @@ if ($UserAudit) {
 
 		if ($ADType -eq "Azure") {
 			## Azure
-			$FullADUsers = Get-MgUser -All -Property Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses | Select-Object Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses
+			$FullADUsers = Get-MgUser -All -Property Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, CreatedDateTime, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses | Select-Object Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, CreatedDateTime, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses
 	
 			$FullADUsers = $FullADUsers | 
 								Select-Object -Property Id, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
-									@{Name="EmailAddress"; E={$_.mail}}, @{Name="Enabled"; E={$_.AccountEnabled}}, @{Name="Description"; E={""}}, SignInActivity,
+									@{Name="EmailAddress"; E={$_.mail}}, @{Name="Enabled"; E={$_.AccountEnabled}}, @{Name="Created"; E={$_.CreatedDateTime}}, @{Name="Description"; E={""}}, SignInActivity,
 									City, Department, @{Name="Division"; E={""}}, @{Name="Title"; E={$_.JobTitle}}, MailNickname, UserType, AssignedLicenses
 			$FullADUsers = $FullADUsers | Where-Object  { $_.UserType -eq "Member" }
 	
@@ -417,7 +417,7 @@ if ($UserAudit) {
 		} else {
 			$FullADUsers = Get-ADUser -Filter * -Properties * | 
 								Select-Object -Property Name, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
-												Description, LastLogonDate, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
+												Description, LastLogonDate, Created, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
 												@{Name="OUs"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)').Value -replace 'OU='}}, 
 												@{Name="PrimaryCN"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)')[0].Groups[2]}}, 
 												@{Name="CNs"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)').Value -replace 'CN='}}, 
@@ -1340,7 +1340,9 @@ if ($UserAudit) {
 						# ImproperlyTerminated
 						$WarnObj.type = "ImproperlyTerminated"
 						$WarnObj.reason = "AD Account Improperly Disabled. Please review and fix. (Description lists Disabled but account is not disabled.)"
-					} elseif ((!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) -and (!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD')) -and $ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+					} elseif (((!$ADMatch.LastLogonDate -and $ADMatch.Created -lt (Get-Date).AddDays(-30)) -or ($ADMatch.LastLogonDate -and $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150))) -and 
+								(!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD')) -and 
+								$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
 						# MaybeTerminate
 						$WarnObj.type = "MaybeTerminate"
 						$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
@@ -1351,7 +1353,8 @@ if ($UserAudit) {
 							$WarnObj.reason += " (Last Login: Never)"
 						}
 						# If $InactivityO365Preference is $true, this gets skipped and will only be checked in the O365 section if the O365 account is inactive
-					} elseif ($NoRecentUsage -and (!$ADMatch.LastLogonDate -or $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-60)) -and 
+					} elseif ($NoRecentUsage -and 
+							((!$ADMatch.LastLogonDate -and $ADMatch.Created -lt (Get-Date).AddDays(-30)) -or ($ADMatch.LastLogonDate -and $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-60))) -and 
 							(!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD')) -and 
 							$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
 						# MaybeTerminate[NoRecentDeviceUsage]
