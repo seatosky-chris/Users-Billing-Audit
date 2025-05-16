@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Apr 25 2025
+# Last Modified: Fri May 16 2025
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -859,7 +859,7 @@ if ($CheckAD) {
 		$FullADUsers = Get-MgUser -All -Property Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, CreatedDateTime, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses | Select-Object Id, DisplayName, GivenName, Surname, UserPrincipalName, AccountEnabled, CreatedDateTime, SignInActivity, City, Department, JobTitle, Mail, MailNickname, UserType, AssignedLicenses
 
 		$FullADUsers = $FullADUsers | 
-							Select-Object -Property Id, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
+							Select-Object -Property Id, DisplayName, @{Name="Name"; E={$_.DisplayName}}, GivenName, Surname, @{Name="Username"; E={$_.UserPrincipalName}}, 
 								@{Name="EmailAddress"; E={$_.mail}}, @{Name="Enabled"; E={$_.AccountEnabled}}, @{Name="Created"; E={$_.CreatedDateTime}}, @{Name="Description"; E={""}}, SignInActivity,
 								City, Department, @{Name="Division"; E={""}}, @{Name="Title"; E={$_.JobTitle}}, MailNickname, UserType, AssignedLicenses
 		$FullADUsers = $FullADUsers | Where-Object  { $_.UserType -eq "Member" }
@@ -885,7 +885,7 @@ if ($CheckAD) {
 	} else {
 		## On-Premise AD
 		$FullADUsers = Get-ADUser -Filter * -Properties * | 
-							Select-Object -Property Name, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
+							Select-Object -Property Name, DisplayName, GivenName, Surname, @{Name="Username"; E={$_.SamAccountName}}, EmailAddress, Enabled, 
 											Description, LastLogonDate, Created, @{Name="PrimaryOU"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)')[0].Groups[2]}}, 
 											@{Name="OUs"; E={[regex]::matches($_.DistinguishedName, '\b(OU=)([^,]+)').Value -replace 'OU='}}, 
 											@{Name="PrimaryCN"; E={[regex]::matches($_.DistinguishedName, '\b(CN=)([^,]+)')[0].Groups[2]}}, 
@@ -2782,6 +2782,30 @@ if ($FullMatches) {
 					$EmailOnlyDetails = "Mailbox is not a UserMailbox"
 				}
 
+				# Check to see if this user looks like a councillor, trustee, or similar (where they generally aren't billed, but can easily be misclassified)
+				# This is used for an extra safety check
+				$CouncillorStatus = $false
+				$TypesToCheck = @("Councillor", "Trustee", "Board Member")
+				$TypesToCheckWithSpaces = $TypesToCheck | Where-Object { $_ -like "* *" }
+
+				if (($ADMatch.DisplayName -and ($TypesToCheck | Where-Object { $ADMatch.DisplayName -like "*$($_)*" })) -or
+					($ADMatch.Name -and ($TypesToCheck | Where-Object { $ADMatch.Name -like "*$($_)*" })) -or
+					($ADMatch.Description -and ($TypesToCheck | Where-Object { $ADMatch.Description -like "*$($_)*" })) -or
+					($ADMatch.EmailAddress -and ($TypesToCheck | Where-Object { $ADMatch.EmailAddress -like "*$($_)*" })) -or
+					($ADMatch.EmailAddress -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.EmailAddress -like "*$($_ -replace " ", "_")*" })) -or
+					($ADMatch.EmailAddress -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.EmailAddress -like "*$($_ -replace " ", "-")*" })) -or
+					($ADMatch.EmailAddress -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.EmailAddress -like "*$($_ -replace " ", ".")*" })) -or
+					($ADMatch.Username -and ($TypesToCheck | Where-Object { $ADMatch.Username -like "*$($_)*" })) -or
+					($ADMatch.Username -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.Username -like "*$($_ -replace " ", "_")*" })) -or
+					($ADMatch.Username -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.Username -like "*$($_ -replace " ", "-")*" })) -or
+					($ADMatch.Username -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.Username -like "*$($_ -replace " ", ".")*" })) -or
+					($ADMatch.Title -and ($TypesToCheck | Where-Object { $ADMatch.DisplayName -like "*$($_)*" })) -or 
+					($ADMatch.Groups -and ($TypesToCheck | Where-Object { $ADMatch.Groups -like "$($_)*" })) -or 
+					($ADType -ne "Azure" -and $ADMatch.OUs -and ($TypesToCheck | Where-Object { $ADMatch.OUs -like "$($_)*" }))) 
+				{
+					$CouncillorStatus = $true
+				}
+
 				if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and $LoginUserType -ne 'Local' -and 'ToTerminated' -notin $IgnoreWarnings) {
 					# ToTerminated
 					if ($ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave') {
@@ -2792,12 +2816,34 @@ if ($FullMatches) {
 					# ImproperlyTerminated
 					$WarnObj.type = "ImproperlyTerminated"
 					$WarnObj.reason = "AD Account Improperly Disabled. Please review and fix. (Description lists Disabled but account is not disabled.)"
+				} elseif ((!$ADMatch.LastLogonDate -and $ADMatch.Created -lt (Get-Date).AddDays(-30)) -and !$EmailOnlyHaveAD -and 
+							$ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD' -and 
+							$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminateORWrongOU' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+					# MaybeTerminateORWrongOU
+					$WarnObj.type = "MaybeTerminateORWrongOU"
+					$WarnObj.reason = "AD Account Never Used. Client is setup to not have AD accounts for email-only. Maybe this is in the wrong OU? Or should be disabled? Please review."
+				} elseif (((!$ADMatch.LastLogonDate -and $ADMatch.Created -lt (Get-Date).AddDays(-30)) -or ($ADMatch.LastLogonDate -and $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150))) -and 
+							$EmailOnlyHaveAD -and $HasEmail -and $EmailEnabled -and $O365Match -and $O365Match.o365.RecipientTypeDetails -like 'UserMailbox' -and (!$LoginUserType -or $LoginUserType -notin ('Local', 'AzureAD')) -and
+							($O365Match.o365.LastUserActionTime -and $O365Match.o365.LastUserActionTime -gt (Get-Date).AddDays(-30)) -and
+							$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Employee - Email Only" -and $ContactType -ne "Terminated" -and 'MaybeTerminateOREmailOnly' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
+					# MaybeTerminateOrEmailOnly
+					$WarnObj.type = "MaybeTerminateOREmailOnly"
+					$WarnObj.reason = "AD Account Unused but O365 has recent activity. Maybe change this to Email Only? Or maybe it should be disabled? Please review."
+					if ($ADMatch.LastLogonDate) {
+						$LastLoginDaysAgo = (New-TimeSpan -Start $ADMatch.LastLogonDate -End (Get-Date)).Days
+						if ($ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) { $WarnObj.reason += " (Last AD Login: $($LastLoginDaysAgo) days ago)" }
+					}
 				} elseif (((!$ADMatch.LastLogonDate -and $ADMatch.Created -lt (Get-Date).AddDays(-30)) -or ($ADMatch.LastLogonDate -and $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150))) -and 
 							(!$EmailOnlyHaveAD -or ($ContactType -notlike "Employee - Email Only" -and !$EmailOnly -and $LoginUserType -ne 'AzureAD')) -and 
 							$ContactType -ne "Employee - On Leave" -and $ContactType -ne "Terminated" -and 'MaybeTerminate' -notin $IgnoreWarnings -and !$InactivityO365Preference) {
-					# MaybeTerminate
-					$WarnObj.type = "MaybeTerminate"
-					$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
+					# MaybeTerminate / MaybeTerminateORWrongOU
+					if (!$EmailOnlyHaveAD -and 'MaybeTerminateORWrongOU' -notin $IgnoreWarnings) {
+						$WarnObj.type = "MaybeTerminateORWrongOU"
+						$WarnObj.reason = "AD Account Unused. Client is setup to not have AD accounts for email-only. Maybe this is in the wrong OU? Or maybe should be disabled? Please review. (Last login > 150 days ago.)"
+					} else {
+						$WarnObj.type = "MaybeTerminate"
+						$WarnObj.reason = "AD Account Unused. Maybe disable it? Please review. (Last login > 150 days ago.)"
+					}
 					if ($ADMatch.LastLogonDate) {
 						$LastLoginDaysAgo = (New-TimeSpan -Start $ADMatch.LastLogonDate -End (Get-Date)).Days
 						if ($ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) { $WarnObj.reason += " (Last Login: $($LastLoginDaysAgo) days ago)" }
@@ -2867,6 +2913,21 @@ if ($FullMatches) {
 					$WarnObj.type = "ToEmployee[FromPartTime]"
 					$WarnObj.reason = "AD account appears to be a full employee but is currently set to part time. Consider changing the IT Glue Contact type to 'Employee'."
 					$WarnObj.reason += " (Last Months Usage: $($LastMonthUsage)% [$($UsageStats.DaysActive.LastMonth) days])"
+				} elseif ($CouncillorStatus -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "External User" -and $ContactType -in $BilledContactTypes -and
+								(!$ADMatch.LastLogonDate -or ($ADMatch.LastLogonDate -and $ADMatch.LastLogonDate -lt (Get-Date).AddDays(-60))) -and 'ToEmailOnly' -notin $IgnoreWarnings -and 'ToEmailOnly[CouncillorStatus]' -notin $IgnoreWarnings) {
+					#ToEmailOnly[CouncillorStatus]
+					$WarnObj.type = "ToEmailOnly[CouncillorStatus]"
+					if (!$EmailOnlyHaveAD) {
+						$WarnObj.reason = "AD account appears to be a councillor but is in a billed state. Client is setup to not have AD accounts for email-only. Please verify this is correct. AD account unused for > 60 days. Consider changing the IT Glue Contact type to 'Employee - Email Only'."
+					} else {
+						$WarnObj.reason = "AD account appears to be a councillor but is in a billed state. Please verify this is correct. AD account unused for > 60 days. Consider changing the IT Glue Contact type to 'Employee - Email Only'."
+					}
+					if ($ADMatch.LastLogonDate) {
+						$LastLoginDaysAgo = (New-TimeSpan -Start $ADMatch.LastLogonDate -End (Get-Date)).Days
+						if ($ADMatch.LastLogonDate -lt (Get-Date).AddDays(-150)) { $WarnObj.reason += " (Last Login: $($LastLoginDaysAgo) days ago)" }
+					} else {
+						$WarnObj.reason += " (Last Login: Never)"
+					}
 				} elseif (!$ContactType) {
 					#ToEmployee
 					$WarnObj.type = "ToEmployee"
@@ -3031,9 +3092,9 @@ if ($FullMatches) {
 				# MaybeTerminate
 				$WarnObj.type = "MaybeTerminate"
 				$WarnObj.reason = "$EmailType Account and associated AD Account are Unused. Maybe disable them? Please review. (Last login > 150 days ago.)"
-			} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings) {
+			} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[SharedMailbox]' -notin $IgnoreWarnings) {
 				# MaybeTerminate
-				$WarnObj.type = "MaybeTerminate"
+				$WarnObj.type = "MaybeTerminate[SharedMailbox]"
 				$WarnObj.reason = "$EmailType Account is a Shared Mailbox and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
 			} elseif ($O365Match.DeliverToMailboxAndForward -eq $false -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and ($O365Match.ForwardingSmtpAddress -or $O365Match.ForwardingAddress) -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[Forwarding]' -notin $IgnoreWarnings) {
 				# MaybeTerminate
