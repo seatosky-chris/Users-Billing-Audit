@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri May 16 2025
+# Last Modified: Thu May 28 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -75,7 +75,8 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 # Setup logging
 If (Get-Module -ListAvailable -Name "PSFramework") {Import-module PSFramework} Else { install-module PSFramework -Force; import-module PSFramework}
 $logFile = Join-Path -path "$PSScriptRoot\ErrorLogs" -ChildPath "log-$(Get-date -f 'yyyyMMddHHmmss').txt";
-Set-PSFLoggingProvider -Name logfile -FilePath $logFile -Enabled $true;
+$logRotatePath = Join-Path -path "$PSScriptRoot\ErrorLogs" -ChildPath "log-*.txt";
+Set-PSFLoggingProvider -Name logfile -FilePath $logFile -LogRotatePath $logRotatePath -LogRetentionTime '90d' -Enabled $true -Wait;
 Write-PSFMessage -Level Verbose -Message "Starting audit."
 
 # Check for any required updates
