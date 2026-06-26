@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu May 28 2026
+# Last Modified: Fri Jun 26 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2290,6 +2290,16 @@ if ($BillingUpdate) {
 		Unbilled = ($unbilledCsvTable | Where-Object { !$_.Type -or $_.Type -eq "Unknown" } | Measure-Object).Count
 	}
 
+	# Get total full time and part time counts for the totals table
+	$TotalsByTime = @()
+	$TotalsByTime += [PSCustomObject]@{
+		Type = "Full Time Total"
+		Billed = ($billedCsvTable | Where-Object { $_.Type -notlike "*Part Time*" } | Measure-Object).Count
+	}
+	$TotalsByTime += [PSCustomObject]@{
+		Type = "Part Time Total"
+		Billed = ($billedCsvTable | Where-Object { $_.Type -like "*Part Time*" } | Measure-Object).Count
+	}
 
 	# calculate total changes
 	if ($CheckChanges) {
@@ -2317,7 +2327,7 @@ if ($BillingUpdate) {
 	# Create the excel document
 	$MonthName = (Get-Culture).DateTimeFormat.GetMonthName([int](Get-Date -Format MM))
 	$Year = Get-Date -Format yyyy
-	$FileName = "$($OrgShortName)--Billed_User_List--$($MonthName)_$Year.xlsx"
+	$FileName = "$($OrgShortName)--Billed_User_List--$($MonthName)_$($Year).xlsx"
 	$Path = $PSScriptRoot + "\$FileName"
 	Remove-Item $Path -ErrorAction SilentlyContinue
 
@@ -2337,6 +2347,18 @@ if ($BillingUpdate) {
 	$totalsTblLastRow += 1
 	$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
 	Set-ExcelRange -Range "B$($totalsTblLastRow):C$($totalsTblLastRow)" @xlParams
+
+	if ($TotalsByTime -and ($TotalsByTime |Where-Object { $_.Type -eq "Part Time Total" }).Billed -gt 0) {
+		# totals by time table
+		$totalsByTimeFirstRow = $totalsTblLastRow + 2
+		$excel = $TotalsByTime | Export-Excel -PassThru -ExcelPackage $excel -WorksheetName $ws -AutoSize -NoHeader -StartRow $totalsByTimeFirstRow
+		Add-ExcelTable -PassThru -Range $ws.Cells["A$($totalsByTimeFirstRow):B$($totalsByTimeFirstRow+1)"] -TableName TotalsByTime -TableStyle "Light21" -ShowFilter:$false -ShowFirstColumn -ShowHeader:$false | Out-Null
+		$xlParams = @{WorkSheet=$ws; BackgroundColor=[System.Drawing.ColorTranslator]::FromHtml("#A9D08E")}
+		Set-ExcelRange -Range "B$($totalsByTimeFirstRow):B$($totalsByTimeFirstRow+1)" @xlParams
+		$xlParams = @{WorkSheet=$ws; Underline=$true}
+		Set-ExcelRange -Range "A$($totalsByTimeFirstRow):A$($totalsByTimeFirstRow+1)" @xlParams
+		$totalsTblLastRow += 3
+	}
 
 	# totals by location table
 	if ($TotalsByLocation -and $HasMultipleLocations) {
