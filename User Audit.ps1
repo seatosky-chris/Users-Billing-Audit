@@ -4412,27 +4412,34 @@ if ($ExportChoice -eq 'Yes') {
 					$ExistingLicenseOverview.data = $ExistingLicenseOverview.data | Where-Object { $_.attributes.traits.name -eq "Office 365 License Overview*" }  | Select-Object -First 1
 				}
 				if ($ExistingLicenseOverview.data -and $ExistingLicenseOverview.data.id) {
-					$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -include attachments
+					$ExistingLicenseOverview = Get-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -include "attachments, related_items"
 				}
 
+				$CreatedNewO365Overview = $false
 				if (!$ExistingLicenseOverview.data -and !$ExistingLicenseOverview.Error) {
 					$LicenseList_FlexAssetBody.attributes.add('organization-id', $orgID)
 					$LicenseList_FlexAssetBody.attributes.add('flexible-asset-type-id', $CustomOverview_FlexAssetID)
 					$ExistingLicenseOverview = New-ITGlueFlexibleAssets -data $LicenseList_FlexAssetBody
+					$CreatedNewO365Overview = $true
 					Write-Host "Created a new O365 License Overview."
+				} else {
+					Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
+					Write-Host "Updated the O365 License Overview."
+				}
 
+				if ($ExistingFlexAsset -and ($CreatedNewO365Overview -or ($ExistingLicenseOverview.included -and ($ExistingLicenseOverview.included | Where-Object { $_.type -eq "related-items" -and $_.attributes.name -eq "Customer Billing" } | Measure-Object).Count -eq 0))) {
 					# relate to the billing overview page
-					if ($ExistingFlexAsset) {
-						$RelatedItems = @{
-							type = 'related_items'
-							attributes = @{
-								destination_id = $ExistingFlexAsset.data.id
-								destination_type = "Flexible Asset"
-							}
+					$RelatedItems = @{
+						type = 'related_items'
+						attributes = @{
+							destination_id = $ExistingFlexAsset.data.id
+							destination_type = "Flexible Asset"
 						}
-						New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
 					}
+					New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
+				}
 
+				if ($CreatedNewO365Overview -or ($ExistingLicenseOverview.included -and ($ExistingLicenseOverview.included | Where-Object { $_.type -eq "related-items" -and $_.attributes.name -like "Office 365 *" } | Measure-Object).Count -eq 0)) {
 					# and email Office 365 page too if it exists
 					$EmailFilterID = (Get-ITGlueFlexibleAssetTypes -filter_name "Email").data
 					$EmailOverview = Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $EmailFilterID.id -filter_organization_id $orgID
@@ -4447,9 +4454,6 @@ if ($ExportChoice -eq 'Yes') {
 						}
 						New-ITGlueRelatedItems -resource_type flexible_assets -resource_id $ExistingLicenseOverview.data.id -data $RelatedItems | Out-Null
 					}
-				} else {
-					Set-ITGlueFlexibleAssets -id $ExistingLicenseOverview.data.id -data $LicenseList_FlexAssetBody | Out-Null
-					Write-Host "Updated the O365 License Overview."
 				}
 			} else {
 				Write-Error "An error occurred trying to get the existing license overview from ITG. Skipped updating."
