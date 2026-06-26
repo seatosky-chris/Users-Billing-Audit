@@ -430,6 +430,7 @@ if ($UserAudit) {
 			$FullADUsers | ForEach-Object {
 				$_ | Add-Member -MemberType NoteProperty -Name Groups -Value $null
 				$ADGroups = Get-ADPrincipalGroupMembership $_.Username
+				$ADGroups = $ADGroups | Where-Object { $_.GroupCategory -ne "Distribution"}
 				if ($ADGroups -and $EmailOnlyGroupsOUIgnore) {
 					foreach ($IgnoreOU in $EmailOnlyGroupsOUIgnore) {
 						$ADGroups = $ADGroups | Where-Object { $_.distinguishedName -notlike "*OU=$($IgnoreOU),*" }
@@ -1426,7 +1427,7 @@ if ($UserAudit) {
 						$WarnObj.type = "ToEnabled"
 						$WarnObj.reason = "AD Account Enabled. IT Glue Contact should not be 'Terminated'."
 					} elseif ($ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-								!$NoRecentUsage -and $PartTimeUsage -and !$EmailOnly -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
+								!$NoRecentUsage -and $PartTimeUsage -and $PartTimeEmployeesByUsage -and !$EmailOnly -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
 						# ToEmployeePartTime
 						$WarnObj.type = "ToEmployeePartTime"
 						$WarnObj.reason = "AD account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
@@ -1617,7 +1618,7 @@ if ($UserAudit) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate"
 					$WarnObj.reason = "$EmailType Account is Unlicensed and no AD account is associated with this contact. Should this account be terminated? Consider changing the IT Glue type to 'Terminated'."
-				} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[SharedMailbox]' -notin $IgnoreWarnings) {
+				} elseif ($O365Match.RecipientTypeDetails -like 'SharedMailbox' -and $ContactType -ne 'Terminated' -and $ContactType -ne 'Shared Account' -and $ContactType -ne 'Employee - On Leave' -and $O365Match.DisplayName -like "*" + $Contact."last-name" + "*" -and $LoginUserType -ne 'Local' -and 'MaybeTerminate' -notin $IgnoreWarnings -and 'MaybeTerminate[SharedMailbox]' -notin $IgnoreWarnings) {
 					# MaybeTerminate
 					$WarnObj.type = "MaybeTerminate[SharedMailbox]"
 					$WarnObj.reason = "$EmailType Account is a Shared Mailbox and appears to be a terminated account. Consider changing the IT Glue type to 'Terminated'."
@@ -1656,7 +1657,7 @@ if ($UserAudit) {
 						$WarnObj.reason += "(Reason: $EmailOnlyDetails)"
 					}
 				} elseif (!$CheckAD -and $ContactType -notlike "Employee - Part Time" -and $ContactType -notlike "Employee - Email Only" -and $ContactType -notlike "Shared Account" -and $ContactType -notlike "Employee - Multi User" -and 
-							!$NoRecentUsage -and $PartTimeUsage -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
+							!$NoRecentUsage -and $PartTimeUsage -and $PartTimeEmployeesByUsage -and 'ToEmployeePartTime' -notin $IgnoreWarnings) {
 					# ToEmployeePartTime
 					$WarnObj.type = "ToEmployeePartTime"
 					$WarnObj.reason = "$EmailType account appears to be part time. Consider changing the IT Glue Contact type to 'Employee - Part Time'."
