@@ -1950,7 +1950,7 @@ if ($CheckEmail) {
 
 		if (!$LicenseTranslationTable) {
 			New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
-			Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
+			Invoke-WebRequest -UseBasicParsing -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
 			$FullLicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
 			$LicenseTranslationTable_Temp = $FullLicenseTranslationTable | 
 				Group-Object String_Id, Product_Display_Name | 
@@ -4321,7 +4321,7 @@ if ($ExportChoice -eq 'Yes') {
 			$AzureUsers = Get-MgUser -All -Property UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname | Select-Object UserPrincipalName, AssignedLicenses, DisplayName, GivenName, Surname
 			if (!$LicenseTranslationTable) {
 				New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
-				Invoke-WebRequest -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
+				Invoke-WebRequest -UseBasicParsing -Uri "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv" -OutFile "C:\Temp\O365LicenseTranslationTable.csv"
 				$FullLicenseTranslationTable = Import-CSV -Path "C:\Temp\O365LicenseTranslationTable.csv"
 			}
 		
