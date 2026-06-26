@@ -591,7 +591,8 @@ if ($UserAudit) {
 			}
 		}
 
-		$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" }
+		$createdCutoff = (Get-Date).AddDays(-40)
+		$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" } | Sort-Object -Property @{ Expression = "LastLogonDate"; Descending = $true }, @{ Expression = { $_.Created -ge $createdCutoff }; Descending = $true }, @{ Expression = "Name" }
 		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) unmatched AD accounts."
 		$UnmatchedAD = $UnmatchedAD | Where-Object { $_.Username -notin $OldUnmatchedADUsernames } # filter out accounts that have already been reviewed
 		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedAD | Measure-Object).Count) new unmatched AD accounts."
@@ -602,10 +603,10 @@ if ($UserAudit) {
 		Write-PSFMessage -Level Verbose -Message "Getting $EmailType Mailboxes."
 
 		if ($EmailType -eq "O365") {
-			$O365Mailboxes = Get-EXOMailbox -ResultSize unlimited -PropertySets Minimum, AddressList, Delivery, SoftDelete | 
+			$O365Mailboxes = Get-EXOMailbox -ResultSize unlimited -PropertySets Minimum, AddressList, Delivery, SoftDelete -Properties WhenCreated | 
 				Select-Object -Property Name, DisplayName, Alias, PrimarySmtpAddress, EmailAddresses, 
 					RecipientTypeDetails, Guid, UserPrincipalName, 
-					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
+					DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled, WhenCreated |
 				Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
 			Write-PSFMessage -Level Verbose -Message "Got $(($O365Mailboxes | Measure-Object).Count) mailboxes from O365."
 			$AzureUsers = Get-MgUser -All -Property Id, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle | Select-Object Id, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle
@@ -899,7 +900,8 @@ if ($UserAudit) {
 			}
 		}
 
-		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 } | Where-Object { !$_.AccountDisabled }
+		$createdCutoff = (Get-Date).AddDays(-40)
+		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 } | Where-Object { !$_.AccountDisabled } | Sort-Object -Property @{ Expression = "PrimaryLicense" }, @{ Expression = { $_.WhenCreated -ge $createdCutoff }; Descending = $true }, @{ Expression = "DisplayName" }
 		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedO365 | Measure-Object).Count) unmatched mailboxes."
 		$UnmatchedO365 = $UnmatchedO365 | Where-Object { $_.PrimarySmtpAddress -notin $OldUnmatchedO365Emails } # filter out accounts that have already been reviewed
 		Write-PSFMessage -Level Verbose -Message "Found $(($UnmatchedO365 | Measure-Object).Count) new unmatched mailboxes."
@@ -980,6 +982,7 @@ if ($UserAudit) {
 	# Update the Device Audit DB if applicable and get usage data if applicable
 	$UserUsage = @()
 	$DBUsers = $false
+	$UnmatchedLocalUsers = @()
 	if ($FullMatches -and $Device_DB_APIKey -and $Device_DB_APIEndpoint) {
 		If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
 		If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
@@ -1012,6 +1015,7 @@ if ($UserAudit) {
 
 				if ($ExistingUsers) {
 					$DBUsers = $ExistingUsers
+					$UnmatchedLocalUsers = $ExistingUsers | Where-Object { $_.DomainOrLocal -eq "Local" }
 					$Now_UTC = Get-Date (Get-Date).ToUniversalTime() -UFormat '+%Y-%m-%dT%H:%M:%S.000Z'
 					$UserCount = ($ExistingUsers | Measure-Object).Count
 					$i = 0
@@ -1041,6 +1045,8 @@ if ($UserAudit) {
 						$UpdatedUser = $User | Select-Object Id, Domain, DomainOrLocal, Username, LastUpdated, type, O365Email, ITG_ID, ADUsername
 
 						if ($Match) {
+							$UnmatchedLocalUsers = $UnmatchedLocalUsers | Where-Object { $_.Username -ne $User.Username }
+
 							if ($Match.'AD-Username' -and $User.ADUsername -ne $Match.'AD-Username') {
 								$UpdatedUser.ADUsername = $Match.'AD-Username'
 								$User.ADUsername = $Match.'AD-Username'
@@ -1786,8 +1792,21 @@ if ($UserAudit) {
 			Write-Host "Exported contact warnings to a json file."
 		}
 
+		# Also add info on any local usernames found that weren't matched to a contact and were active in the past 2 months
+		$UnmatchedLocalUsers_RecentlySeen = @()
+		foreach ($User in $UnmatchedLocalUsers) {
+			if ($User.LastUpdated -and (Get-Date $User.LastUpdated) -gt (Get-Date).AddMonths(-2)) {
+				$UnmatchedLocalUsers_RecentlySeen += $User.Username
+			} else {
+				$LastActive = Get-UsersDBLastActivity -UserID $User.id
+				if ($LastActive -and (Get-Date $LastActive) -gt (Get-Date).AddMonths(-2)) {
+					$UnmatchedLocalUsers_RecentlySeen += $User.Username
+				}
+			}
+		}
+
 		$WarnCount = ($WarnContacts | Measure-Object).Count
-		if ($WarnCount -gt 0 -or ($UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) -or ($UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0)) {
+		if ($WarnCount -gt 0 -or ($UnmatchedAD -and ($UnmatchedAD | Measure-Object).Count -gt 0) -or ($UnmatchedO365 -and ($UnmatchedO365 | Measure-Object).Count -gt 0) -or ($UnmatchedLocalUsers_RecentlySeen | Measure-Object).Count -gt 0) {
 			if ($EmailFrom.Email -and $EmailTo_Audit[0] -and $EmailTo_Audit[0].Email) {
 				# Lets add info on any duplicate contacts (only if other warnings exist)
 				$UniqueContacts = $FullContactList.attributes."name" | Select-Object -Unique
@@ -1894,7 +1913,7 @@ if ($UserAudit) {
 							<ul>
 					'
 					foreach ($ADAccount in $UnmatchedAD) {
-						$HTMLBody += "<li><u>$($ADAccount.Name)</u> ($($ADAccount.EmailAddress)) (Last Logon: $($ADAccount.LastLogonDate)) ($($ADAccount.Description))</li>"
+						$HTMLBody += "<li><u>$($ADAccount.Name)</u> ($($ADAccount.EmailAddress)) (Last Logon: $(if ($ADAccount.LastLogonDate) { $ADAccount.LastLogonDate.ToShortDateString() } else { "N/A" })) (Created: $(if ($ADAccount.Created) { $ADAccount.Created.ToShortDateString() } else { "N/A" })) ($($ADAccount.Description))</li>"
 					}
 					$HTMLBody += '</ul><br />'
 				}
@@ -1910,7 +1929,7 @@ if ($UserAudit) {
 							<ul>
 					'
 					foreach ($O365Account in $UnmatchedO365) {
-						$HTMLBody += "<li><u>$($O365Account.DisplayName)</u> ($($O365Account.PrimarySmtpAddress)) (Primary License: $($O365Account.PrimaryLicense))</li>"
+						$HTMLBody += "<li><u>$($O365Account.DisplayName)</u> ($($O365Account.PrimarySmtpAddress)) (Created: $(if ($O365Account.WhenCreated) { $O365Account.WhenCreated.ToShortDateString() } else { "N/A" })) (Primary License: $($O365Account.PrimaryLicense))</li>"
 					}
 					$HTMLBody += '</ul><br />'
 				}
@@ -1928,6 +1947,23 @@ if ($UserAudit) {
 						$Contact = $FullContactList | Where-Object { $_.id -eq $ID }
 						$PrimaryEmail = ($Contact.attributes."contact-emails" | Where-Object {$_.primary -eq $true}).value
 						$HTMLBody += "<li><u>$($Contact.attributes.Name)</u> ($($Contact.attributes.'contact-type-name')) (Location: $($Contact.attributes.'location-name')) (Email: $($PrimaryEmail)) (URL: $($Contact.attributes.'resource-url'))</li>"
+					}
+					$HTMLBody += '</ul><br />'
+				}
+
+				if (($UnmatchedLocalUsers_RecentlySeen | Measure-Object).Count -gt 0) {
+					$HTMLBody += '<br />
+							<p style="font-family: sans-serif; font-size: 18px; font-weight: normal; margin: 0; Margin-bottom: 15px;"><strong>Local Usernames found without a Contact Match</strong></p>
+							<p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; Margin-bottom: 15px;">
+								The following local usernames were found in the DB but were not connected to any contacts.<br />
+								Please review and add these usernames to an ITG contact where necessary.<br />
+								You can do this by simply adding "Username: the local username" into the notes of a contact in ITG.
+							</p>
+							<ul>
+					'
+
+					foreach ($Username in $UnmatchedLocalUsers_RecentlySeen) {
+						$HTMLBody += "<li>$($Username)</li>"
 					}
 					$HTMLBody += '</ul><br />'
 				}

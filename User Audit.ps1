@@ -1873,7 +1873,8 @@ if ($CheckAD -and $NoMatch) {
 	NoMatchForm('AD')
 }
 
-$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" }
+$createdCutoff = (Get-Date).AddDays(-40)
+$UnmatchedAD = $ADEmployees | Where-Object { $ADMatches.ad.Username -notcontains $_.Username } | Where-Object { $_.Enabled -eq "True" } | Sort-Object -Property @{ Expression = "LastLogonDate"; Descending = $true }, @{ Expression = { $_.Created -ge $createdCutoff }; Descending = $true }, @{ Expression = "Name" }
 if (($UnmatchedAD | Measure-Object).Count -gt 0) {
 	Write-Host "Warning! AD accounts found without a match." -ForegroundColor Red
 	$UnmatchedAD | Out-GridView -PassThru -Title "Warning! AD accounts found without a match."
@@ -1899,10 +1900,10 @@ if ($CheckEmail) {
 
 	# Get the mailbox info and put it all together
 	if ($EmailType -eq "O365") {
-		$O365Mailboxes = Get-EXOMailbox -ResultSize unlimited -PropertySets Minimum, AddressList, Delivery, SoftDelete | 
+		$O365Mailboxes = Get-EXOMailbox -ResultSize unlimited -PropertySets Minimum, AddressList, Delivery, SoftDelete -Properties WhenCreated | 
 			Select-Object -Property Name, DisplayName, Alias, PrimarySmtpAddress, EmailAddresses, 
 				RecipientTypeDetails, Guid, UserPrincipalName, 
-				DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled |
+				DeliverToMailboxAndForward, ForwardingSmtpAddress, ForwardingAddress, HiddenFromAddressListsEnabled, WhenCreated |
 			Where-Object { $_.RecipientTypeDetails -notlike "DiscoveryMailbox" }
 		$AzureUsers = Get-MgUser -All -Property Id, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle | Select-Object Id, UserPrincipalName, AccountEnabled, AssignedLicenses, DisplayName, GivenName, Surname, JobTitle
 		$DisabledAccounts = $AzureUsers | Where-Object { $_.AccountEnabled -eq $false } | Select-Object -ExpandProperty UserPrincipalName
@@ -2262,7 +2263,8 @@ if ($CheckEmail) {
 
 	# Display a warning with any licensed O365 accounts that don't have an IT Glue match
 	if ($EmailType -eq "O365") {
-		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 }
+		$createdCutoff = (Get-Date).AddDays(-40)
+		$UnmatchedO365 = $O365Mailboxes | Where-Object { $O365Matches.o365.PrimarySmtpAddress -notcontains $_.PrimarySmtpAddress } | Where-Object { ($_.AssignedLicenses | Measure-Object).Count -gt 0 } | Sort-Object -Property @{ Expression = "PrimaryLicense" }, @{ Expression = { $_.WhenCreated -ge $createdCutoff }; Descending = $true }, @{ Expression = "DisplayName" }
 		if (($UnmatchedO365 | Measure-Object).Count -gt 0) {
 			Write-Host "Warning! O365 accounts found without a match." -ForegroundColor Red
 			$UnmatchedO365 | Out-GridView -PassThru -Title "Warning! O365 accounts found without a match."
