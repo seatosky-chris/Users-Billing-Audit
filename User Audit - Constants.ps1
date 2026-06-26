@@ -395,7 +395,7 @@ $EmployeeContactTypes = @(
 $BilledContactTypes = @(
 	"Approver", "Champion", "Contractor", "Decision Maker", "Employee", 
 	"Employee - Part Time", "Employee - Temporary", "Employee - Multi User",
-	"Influencer", "Management", "Owner"
+	"Influencer", "Management", "Internal IT", "Owner"
 )
 
 ####################
@@ -405,7 +405,7 @@ $BilledContactTypes = @(
 # These contact types will be shown on the billed user list as "unbilled accounts"
 #
 $UnbilledContactTypes = @(
-	"Employee - Email Only", "Internal IT", "Shared Account", "Employee - On Leave"
+	"Employee - Email Only", "Shared Account", "Employee - On Leave"
 )
 
 ####################
