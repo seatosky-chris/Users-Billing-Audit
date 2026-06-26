@@ -2802,7 +2802,7 @@ if ($FullMatches) {
 					($ADMatch.Username -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.Username -like "*$($_ -replace " ", "_")*" })) -or
 					($ADMatch.Username -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.Username -like "*$($_ -replace " ", "-")*" })) -or
 					($ADMatch.Username -and ($TypesToCheckWithSpaces | Where-Object { $ADMatch.Username -like "*$($_ -replace " ", ".")*" })) -or
-					($ADMatch.Title -and ($TypesToCheck | Where-Object { $ADMatch.DisplayName -like "*$($_)*" })) -or 
+					($ADMatch.Title -and ($TypesToCheck | Where-Object { $ADMatch.Title -like "*$($_)*" })) -or 
 					($ADMatch.Groups -and ($TypesToCheck | Where-Object { $ADMatch.Groups -like "$($_)*" })) -or 
 					($ADType -ne "Azure" -and $ADMatch.OUs -and ($TypesToCheck | Where-Object { $ADMatch.OUs -like "$($_)*" }))) 
 				{
