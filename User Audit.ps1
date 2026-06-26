@@ -443,23 +443,37 @@ if ($RunPreCleanup -eq 'Yes') {
 	Write-Host "Checking for contacts with an incorrect email domain."
 	$Domains = (Get-ITGlueDomains -organization_id $OrgID).data
 	if ($Domains) {
-		$DomainNames = $Domains.attributes.name
-		$BadContacts = $FullContactList | Where-Object { 
-			$BadContact = $false
-			foreach ($ContactEmail in $_.attributes."contact-emails") {
+		$DomainNames = @($Domains.attributes.name | Where-Object { $_ })
+		$BadContacts = @()
+		foreach ($Contact in $FullContactList) {
+			$HasAllowedDomain = $false
+			foreach ($ContactEmail in @($Contact.attributes."contact-emails")) {
 				$Email = $ContactEmail.value
-				if (($DomainNames | Where-Object { $Email -like "*"+$_ } | Measure-Object).Count -gt 0) {
-					$BadContact = $false
+				if ([string]::IsNullOrWhiteSpace($Email)) {
+					continue
+				}
+
+				$EmailDomain = ($Email.Split('@')[1]).ToLowerInvariant()
+				if ($EmailDomain.EndsWith('.onmicrosoft.com')) {
+					$HasAllowedDomain = $true
 					break
-				} else {
-					$BadContact = $true
+				}
+
+				foreach ($AllowedDomain in $DomainNames) {
+					$AllowedDomainLower = $AllowedDomain.ToLowerInvariant()
+					if ($EmailDomain -eq $AllowedDomainLower -or $EmailDomain.EndsWith(".$AllowedDomainLower")) {
+						$HasAllowedDomain = $true
+						break
+					}
+				}
+
+				if ($HasAllowedDomain) {
+					break
 				}
 			}
 
-			if ($BadContact) {
-				return $true
-			} else {
-				return $false
+			if (-not $HasAllowedDomain -and ($Contact.attributes."contact-emails" | Measure-Object).Count -gt 0) {
+				$BadContacts += $Contact
 			}
 		}
 		$IgnoreContactTypes = @('Contractor', 'External User', 'Other', 'Service Account', 'Terminated', 'Vendor Support')
