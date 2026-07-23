@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Fri Jun 26 2026
+# Last Modified: Thu Jul 23 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -1364,7 +1364,9 @@ if ($UserAudit) {
 					}
 
 
-					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and $LoginUserType -ne 'Local' -and 'ToTerminated' -notin $IgnoreWarnings) {
+					if (($ADMatch.Enabled -eq $false -or $ADMatch.OU -like '*Disabled*') -and $LoginUserType -ne 'Local' -and 'ToTerminated' -notin $IgnoreWarnings -and
+						(!$HasEmail -or $($HasEmail -and $EmailEnabled -and $ADMatch.Description -notlike '*Email Only*' -and $Contact.notes -notlike "*Email Only*") -or $ContactType -eq 'Terminated')
+					) {
 						# ToTerminated
 						if ($ContactType -ne 'Terminated' -and $ContactType -ne 'Employee - On Leave') {
 							$WarnObj.type = "ToTerminated"
