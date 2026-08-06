@@ -69,3 +69,14 @@ $O365LicenseTypes_EmailOnly = @(
   "WACONEDRIVESTANDARD", "WACONEDRIVEENTERPRISE", "SHAREPOINTSTANDARD", "SHAREPOINTENTERPRISE",
   "ATP_ENTERPRISE", "THREAT_INTELLIGENCE", "FLOW_FREE_FLOW_P2_VIRAL"
 )
+
+####################
+# $O365LicenseTranslation_Fallback
+# 
+# Occasionally Microsoft leaves a license Sku off of their official list of licenses, so this is a fallback translation table for those licenses
+# By default it will look for the license here: https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
+# This is for Sku's not on that list
+#
+$O365LicenseTranslation_Fallback = @{
+	"a69133fb-7e57-40ce-9a69-6c8551bb7854" = "Microsoft 365 Copilot Business"
+}

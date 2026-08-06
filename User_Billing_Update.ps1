@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Jul 23 2026
+# Last Modified: Thu Aug 06 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -2855,7 +2855,24 @@ if ($CheckEmail -and $EmailType -eq "O365") {
 		$LicenseSkus | ForEach-Object {
 			$sku = $_.SkuId
 			$License = ($FullLicenseTranslationTable |  Where-Object {$_.GUID -eq $sku } | Sort-Object Product_Display_Name -Unique)
-			$Licenses[$License.String_Id] = $License.Product_Display_Name
+
+			if ($License) {
+				$Licenses[$License.String_Id] = $License.Product_Display_Name
+			} else {
+				$LicenseName = $O365LicenseTranslation_Fallback[$sku]
+				if (!$LicensePlanList) {
+					$LicensePlanList = Get-MgSubscribedSku
+				}
+				if ($LicenseName) {
+					$SkuStringID = $LicensePlanList | Where-Object { $_.SkuId -eq $sku } | Select-Object -ExpandProperty SkuPartNumber
+					if (!$SkuStringID) {
+						$SkuStringID = $sku
+					}
+					$Licenses[$SkuStringID] = $LicenseName
+				} else {
+					$Licenses[$sku] = "Unknown License ($sku)"
+				}
+			}
 		}
 
 		$UserInfo = [pscustomobject]@{
