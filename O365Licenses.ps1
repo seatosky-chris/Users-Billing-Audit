@@ -79,4 +79,5 @@ $O365LicenseTypes_EmailOnly = @(
 #
 $O365LicenseTranslation_Fallback = @{
 	"a69133fb-7e57-40ce-9a69-6c8551bb7854" = "Microsoft 365 Copilot Business"
+	"12ca7905-c7a8-4798-b720-c801f50b51a1" = "Teams Phone with pay-as-you-go calling (country zone 1)"
 }

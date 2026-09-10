@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Aug 06 2026
+# Last Modified: Thu Sep 03 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -43,7 +43,7 @@ Write-Host "User audit starting..."
 
 ### Load Variables from external file
 ### Make sure you setup your variables in the User Audit - Constants.ps1 file
-### Or if this is a central audit for customers that are cloud based, create a Constants folder
+### Or if this is a central audit for customers that are cloud based, create a Constants folder 
 ### and include a Constants file for each customer to be audited. Then use the $config param to set
 ### the config file to be used for the current run. Set $config to the full name of the file (without the file extension). e.g. "BCCP-Config"
 if (!$config) {
