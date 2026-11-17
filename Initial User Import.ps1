@@ -4,7 +4,7 @@
 # Created Date: Tuesday, March 3rd 2026, 9:49:37 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Mar 12 2026
+# Last Modified: Tue Nov 17 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2026 Sea to Sky Network Solutions
@@ -67,16 +67,6 @@ if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
 	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
 }
 
-if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azure")) {
-	# This module needs to be imported before others so lets do this right away
-	If (Get-Module -ListAvailable -Name "MSAL.PS") {
-		Import-Module MSAL.PS
-	} else {
-		Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
-		Install-Module -Name MSAL.PS
-	}
-}
-
 If (Get-Module -ListAvailable -Name "ITGlueAPI") {
 	Import-module ITGlueAPI
 } Else { 
@@ -110,7 +100,7 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 	if ($Version.Major -lt 2 -or $Version.Minor -lt 8) {
 		Remove-Module Microsoft.Graph.Users
 		Uninstall-Module Microsoft.Graph.Users
-		Install-Module -Name Microsoft.Graph.Users
+		Install-Module -Name Microsoft.Graph.Users -MaximumVersion "2.38.0"
 		Import-Module Microsoft.Graph.Users -Force
 	}
 
@@ -119,9 +109,9 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 		Import-Module Microsoft.Graph.Users
 		Import-Module Microsoft.Graph.Identity.DirectoryManagement
 	} else {
-		Install-Module -Name Microsoft.Graph.Authentication
-		Install-Module -Name Microsoft.Graph.Users
-		Install-Module Microsoft.Graph.Identity.DirectoryManagement
+		Install-Module -Name Microsoft.Graph.Authentication -MaximumVersion "2.38.0"
+		Install-Module -Name Microsoft.Graph.Users -MaximumVersion "2.38.0"
+		Install-Module Microsoft.Graph.Identity.DirectoryManagement -MaximumVersion "2.38.0"
 	}
 
 	# Connect to Microsoft Graph (for Azure)
@@ -151,7 +141,7 @@ if ($CheckEmail) {
 			Import-Module ExchangeOnlineManagement
 		} else {
 			Install-Module PowerShellGet -Force
-			Install-Module -Name ExchangeOnlineManagement -Confirm:$false
+			Install-Module -Name ExchangeOnlineManagement -MaximumVersion 3.4.0 -Confirm:$false
 		}
 
 		if ($O365UnattendedLogin -and $O365UnattendedLogin.AppId) {

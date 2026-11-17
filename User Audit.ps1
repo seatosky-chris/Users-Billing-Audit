@@ -4,7 +4,7 @@
 # Created Date: Tuesday, August 2nd 2022, 10:36:05 am
 # Author: Chris Jantzen
 # -----
-# Last Modified: Thu Aug 06 2026
+# Last Modified: Tue Nov 17 2026
 # Modified By: Chris Jantzen
 # -----
 # Copyright (c) 2023 Sea to Sky Network Solutions
@@ -54,16 +54,6 @@ $CurrentTLS = [System.Net.ServicePointManager]::SecurityProtocol
 if ($CurrentTLS -notlike "*Tls12" -and $CurrentTLS -notlike "*Tls13") {
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 	Write-Host "This device is using an old version of TLS. Temporarily changed to use TLS v1.2."
-}
-
-if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azure")) {
-	# This module needs to be imported before others so lets do this right away
-	If (Get-Module -ListAvailable -Name "MSAL.PS") {
-		Import-Module MSAL.PS
-	} else {
-		Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
-		Install-Module -Name MSAL.PS
-	}
 }
 
 # Check for any required updates
@@ -191,7 +181,7 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 	if ($Version.Major -lt 2 -or $Version.Minor -lt 8) {
 		Remove-Module Microsoft.Graph.Users
 		Uninstall-Module Microsoft.Graph.Users
-		Install-Module -Name Microsoft.Graph.Users
+		Install-Module -Name Microsoft.Graph.Users -MaximumVersion "2.38.0"
 		Import-Module Microsoft.Graph.Users -Force
 	}
 
@@ -200,9 +190,9 @@ if (($CheckEmail -and $EmailType -eq "O365") -or ($CheckAD -and $ADType -eq "Azu
 		Import-Module Microsoft.Graph.Users
 		Import-Module Microsoft.Graph.Identity.DirectoryManagement
 	} else {
-		Install-Module -Name Microsoft.Graph.Authentication
-		Install-Module -Name Microsoft.Graph.Users
-		Install-Module Microsoft.Graph.Identity.DirectoryManagement
+		Install-Module -Name Microsoft.Graph.Authentication -MaximumVersion "2.38.0"
+		Install-Module -Name Microsoft.Graph.Users -MaximumVersion "2.38.0"
+		Install-Module Microsoft.Graph.Identity.DirectoryManagement -MaximumVersion "2.38.0"
 	}
 
 	# Connect to Microsoft Graph (for Azure)
@@ -232,7 +222,7 @@ if ($CheckEmail) {
 			Import-Module ExchangeOnlineManagement
 		} else {
 			Install-Module PowerShellGet -Force
-			Install-Module -Name ExchangeOnlineManagement -Confirm:$false
+			Install-Module -Name ExchangeOnlineManagement -MaximumVersion 3.4.0 -Confirm:$false
 		}
 
 		if ($O365UnattendedLogin -and $O365UnattendedLogin.AppId) {
@@ -2447,8 +2437,8 @@ Write-Host "Exported a contact matching json file."
 $UserUsage = @()
 $DBUsers = $false
 if ($FullMatches -and $Device_DB_APIKey -and $Device_DB_APIEndpoint) {
-	If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts  -Force; import-module Az.Accounts }
-	If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources  -Force; import-module Az.Resources }
+	If (Get-Module -ListAvailable -Name "Az.Accounts") {Import-module Az.Accounts } Else { install-module Az.Accounts -MaximumVersion 4.2.0 -Force; import-module Az.Accounts }
+	If (Get-Module -ListAvailable -Name "Az.Resources") {Import-module Az.Resources } Else { install-module Az.Resources -MaximumVersion 7.11.0 -Force; import-module Az.Resources }
 	#If (Get-Module -ListAvailable -Name "CosmosDB") {Import-module CosmosDB} Else { install-module CosmosDB -Force; import-module CosmosDB}
 
 	$headers = @{
